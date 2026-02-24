@@ -1,0 +1,59 @@
+{
+  "expo": {
+    "name": "McAi Player",
+    "slug": "mc-ai-player",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#0c0c0c"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "app.mcai.videoplayer",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "mimeType": "video/*"
+            },
+            {
+              "mimeType": "video/*",
+              "scheme": "content"
+            },
+            {
+              "mimeType": "video/*",
+              "scheme": "file"
+            },
+            {
+              "mimeType": "video/*",
+              "scheme": "http"
+            },
+            {
+              "mimeType": "video/*",
+              "scheme": "https"
+            }
+          ],
+          "category": [
+            "DEFAULT",
+            "BROWSABLE"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
