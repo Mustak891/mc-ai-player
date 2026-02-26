@@ -27,7 +27,6 @@ import Slider from '@react-native-community/slider';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
-
 import AIOverlay from '../components/AIOverlay';
 import ControlSettingsPanel from '../components/player/ControlSettingsPanel';
 import EqualizerPanel from '../components/player/EqualizerPanel';
@@ -38,7 +37,8 @@ import { RootStackParamList } from '../navigation/types';
 import { equalizerService } from '../services/audio/equalizerService';
 import { floatingOverlayService } from '../services/audio/floatingOverlayService';
 import { pictureInPictureService } from '../services/audio/pictureInPictureService';
-import { aiService } from '../services/ai/LocalAIService';
+import { aiService } from '../services/ai/GeminiService';
+import { adMobService } from '../services/ads/adMobService';
 import { Detection } from '../services/ai/types';
 import { DEFAULT_EQUALIZER_SETTINGS, DEFAULT_PLAYER_CONTROL_SETTINGS, EQUALIZER_FREQUENCIES, EqualizerPresetId, EqualizerSettings, PlayerControlSettings } from '../types/playerSettings';
 import { applyEqualizerPreset, loadEqualizerSettings, saveEqualizerSettings } from '../utils/equalizerStore';
@@ -61,6 +61,7 @@ type PlayerUiStatus = {
     positionMillis: number;
     didJustFinish: boolean;
 };
+type FloatingTransitionState = 'idle' | 'starting' | 'active' | 'error';
 
 type DisplayMode = {
     id:
@@ -105,8 +106,8 @@ const PANEL_TRANSLATE = 16;
 const DOUBLE_TAP_DELAY_MS = 260;
 const RESUME_PROMPT_INACTIVITY_MS = 24 * 60 * 60 * 1000;
 const AUDIO_BOOST_MULTIPLIER = 2;
-const POPUP_WIDTH = 260;
-const POPUP_HEIGHT = 146;
+const POPUP_WIDTH = 160;
+const POPUP_HEIGHT = 90;
 const USE_SYSTEM_PIP = false;
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -165,6 +166,9 @@ const PlayerScreen = () => {
     const morePanelAnim = useRef(new Animated.Value(0)).current;
     const advancedPanelAnim = useRef(new Animated.Value(0)).current;
     const zoomPanelAnim = useRef(new Animated.Value(0)).current;
+    const popupScaleAnim = useRef(new Animated.Value(0.15)).current;
+    const popupOpacityAnim = useRef(new Animated.Value(0)).current;
+    const popupSizeScale = useRef(new Animated.Value(1)).current;
     const volumePanelAnim = useRef(new Animated.Value(0)).current;
     const lastTapTimestamp = useRef(0);
     const hasAutoStarted = useRef(false);
@@ -192,6 +196,8 @@ const PlayerScreen = () => {
     const hasRestoredSubtitlePreferenceRef = useRef(false);
     const pipEntryPendingRef = useRef(false);
     const pipEnteredRef = useRef(false);
+    const floatingToggleInFlightRef = useRef(false);
+    const floatingTransitionResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     const [status, setStatus] = useState<PlayerUiStatus>({
         isLoaded: false,
@@ -214,9 +220,12 @@ const PlayerScreen = () => {
     const [jumpInput, setJumpInput] = useState('');
     const [audioOnlyMode, setAudioOnlyMode] = useState(false);
     const [popUpMode, setPopUpMode] = useState(false);
+    const [popupExpanded, setPopupExpanded] = useState(false);
+    const [floatingTransitionState, setFloatingTransitionState] = useState<FloatingTransitionState>('idle');
     const [pipSupported, setPipSupported] = useState(false);
     const [abRepeatStartMs, setAbRepeatStartMs] = useState<number | null>(null);
     const [abRepeatEndMs, setAbRepeatEndMs] = useState<number | null>(null);
+    const [isAdPlaying, setIsAdPlaying] = useState(false);
     const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
     const [detections, setDetections] = useState<Detection[]>([]);
     const [viewDimensions, setViewDimensions] = useState({ width: 0, height: 0 });
@@ -1103,6 +1112,7 @@ const PlayerScreen = () => {
             if (
                 status.isLoaded &&
                 status.isPlaying &&
+                floatingTransitionState !== 'starting' &&
                 !advancedPanelVisible &&
                 !audioPanelVisible &&
                 !morePanelVisible &&
@@ -1138,6 +1148,7 @@ const PlayerScreen = () => {
         controlSettingsVisible,
         videoTipsVisible,
         playerSettings.controlsHideDelayMs,
+        floatingTransitionState,
     ]);
 
     useEffect(() => {
@@ -1290,6 +1301,10 @@ const PlayerScreen = () => {
             if (pipEntryTimeout.current) {
                 clearTimeout(pipEntryTimeout.current);
             }
+            if (floatingTransitionResetTimeoutRef.current) {
+                clearTimeout(floatingTransitionResetTimeoutRef.current);
+                floatingTransitionResetTimeoutRef.current = null;
+            }
             // Mark inactive to cancel any pending async hardware attachment
             isHardwareVolumeActive = false;
 
@@ -1329,27 +1344,50 @@ const PlayerScreen = () => {
     }, []);
 
     const handleAnalyzeScene = async () => {
-        if (!status.isLoaded || isAiAnalyzing) return;
+        if (!status.isLoaded || isAiAnalyzing || isAdPlaying) return;
 
-        // 1. Pause video and show analyzing state
-        setIsAiAnalyzing(true);
+        // 1. Pause video
         if (status.isPlaying) {
             player.pause();
         }
 
-        try {
-            // 2. Run local hardware ML inference on current frame
-            const currentMillis = status.positionMillis || 0;
-            const result = await aiService.analyze(currentMillis, title, videoUri);
+        // 2. Capture the current timestamp immediately
+        const currentMillis = status.positionMillis || 0;
 
-            // 3. Show Result
+        // 3. Start AI analysis and the Ad IN PARALLEL.
+        //    Gemini (~2s) races against the ad (~5-30s).
+        //    By the time the ad ends, the result is usually already waiting.
+        setIsAdPlaying(true);
+
+        let analysisResolved = false;
+        const analysisPromise = aiService.analyze(currentMillis, title, videoUri).then(r => {
+            analysisResolved = true;
+            return r;
+        });
+        const adPromise = adMobService.showRewardedAd();
+
+        try {
+            const earnedReward = await adPromise;
+            setIsAdPlaying(false);
+
+            if (!earnedReward) {
+                // User skipped the ad — discard the result and resume.
+                player.play();
+                return;
+            }
+
+            // 4. Only show the loading spinner if Gemini isn't done yet.
+            if (!analysisResolved) {
+                setIsAiAnalyzing(true);
+            }
+            const result = await analysisPromise;
+            setIsAiAnalyzing(false);
             setDetections(result.detections);
 
         } catch (error: any) {
-            console.warn('AI Analysis failed:', error);
-        } finally {
+            console.warn('AI Analysis or Ad failed:', error);
+            setIsAdPlaying(false);
             setIsAiAnalyzing(false);
-            // intentionally NOT auto-resuming or auto-hiding here so the user has time to read the full analysis
         }
     };
 
@@ -1905,6 +1943,27 @@ const PlayerScreen = () => {
     };
     const showPiPBlockedPrompt = showOverlayBlockedPrompt;
 
+    const clearFloatingTransitionReset = () => {
+        if (floatingTransitionResetTimeoutRef.current) {
+            clearTimeout(floatingTransitionResetTimeoutRef.current);
+            floatingTransitionResetTimeoutRef.current = null;
+        }
+    };
+
+    const updateFloatingTransitionState = (
+        nextState: FloatingTransitionState,
+        resetAfterMs?: number
+    ) => {
+        clearFloatingTransitionReset();
+        setFloatingTransitionState(nextState);
+        if (typeof resetAfterMs === 'number' && resetAfterMs > 0) {
+            floatingTransitionResetTimeoutRef.current = setTimeout(() => {
+                setFloatingTransitionState('idle');
+                floatingTransitionResetTimeoutRef.current = null;
+            }, resetAfterMs);
+        }
+    };
+
     const clearPiPEntryWatchdog = () => {
         pipEntryPendingRef.current = false;
         pipEnteredRef.current = false;
@@ -1915,20 +1974,31 @@ const PlayerScreen = () => {
     };
 
     const togglePopUpMode = async () => {
+        if (floatingToggleInFlightRef.current) return;
+        floatingToggleInFlightRef.current = true;
         const next = !popUpMode;
         setMorePanelVisible(false);
 
-        if (!USE_SYSTEM_PIP) {
-            try {
+        try {
+            if (!USE_SYSTEM_PIP) {
                 if (next) {
+                    updateFloatingTransitionState('starting');
+                    showSeekFeedback('Opening floating player...', 1300);
+
                     const supported = await floatingOverlayService.isSupported();
                     if (!supported) {
+                        updateFloatingTransitionState('error', 1400);
                         Alert.alert('Floating Player', 'Floating player is supported on Android only.');
+                        showOverlayControls();
+                        resetControlsTimer();
                         return;
                     }
                     const granted = await floatingOverlayService.isPermissionGranted();
                     if (!granted) {
+                        updateFloatingTransitionState('error', 1400);
                         showOverlayBlockedPrompt('Allow "Display over other apps" to use floating player.');
+                        showOverlayControls();
+                        resetControlsTimer();
                         return;
                     }
                     const startAt = statusRef.current.positionMillis || 0;
@@ -1945,101 +2015,114 @@ const PlayerScreen = () => {
                     setPopUpMode(true);
                     closeAllPanels();
                     hideOverlayControls();
+                    updateFloatingTransitionState('active', 1300);
+                    showSeekFeedback('Floating mode enabled', 800);
                 } else {
                     await floatingOverlayService.stopOverlay().catch(() => { });
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     showOverlayControls();
                     resetControlsTimer();
                 }
-            } catch {
+                return;
+            }
+
+            if (!next) {
                 setPopUpMode(false);
-                showOverlayControls();
-                resetControlsTimer();
-                Alert.alert('Floating Player', 'Unable to start floating window on this device right now.');
-            }
-            return;
-        }
-
-        if (!next) {
-            setPopUpMode(false);
-            clearPiPEntryWatchdog();
-            if (pipSupported) {
-                await pictureInPictureService.setAutoEnterEnabled(false);
-            }
-            showOverlayControls();
-            resetControlsTimer();
-            return;
-        }
-
-        const supported = pipSupported || (await pictureInPictureService.isSupported());
-        if (!supported) {
-            setPipSupported(false);
-            setPopUpMode(false);
-            await pictureInPictureService.setAutoEnterEnabled(false);
-            showPiPBlockedPrompt('Picture-in-Picture is not supported or not available on this device.');
-            showOverlayControls();
-            resetControlsTimer();
-            return;
-        }
-
-        setPipSupported(true);
-        let resumedForPiP = false;
-        try {
-            clearPiPEntryWatchdog();
-            pipEntryPendingRef.current = true;
-            await pictureInPictureService.setAutoEnterEnabled(false);
-            if (!statusRef.current.isPlaying && statusRef.current.isLoaded) {
-                player.play();
-                resumedForPiP = true;
-                await new Promise((resolve) => setTimeout(resolve, 180));
-            }
-            await pictureInPictureService.enter(16, 9, statusRef.current.isPlaying);
-            await pictureInPictureService.setAutoEnterEnabled(true);
-            pipEntryTimeout.current = setTimeout(() => {
-                if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
+                updateFloatingTransitionState('idle');
                 clearPiPEntryWatchdog();
-                void pictureInPictureService.setAutoEnterEnabled(false);
-                setPopUpMode(false);
-                void pictureInPictureService.bringAppToFront().catch(() => { });
-                void pictureInPictureService.isSupported().then(setPipSupported).catch(() => { });
-                showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                if (pipSupported) {
+                    await pictureInPictureService.setAutoEnterEnabled(false);
+                }
                 showOverlayControls();
                 resetControlsTimer();
-            }, 1800);
-        } catch {
+                return;
+            }
+
+            updateFloatingTransitionState('starting');
+            showSeekFeedback('Opening floating player...', 1300);
+            const supported = pipSupported || (await pictureInPictureService.isSupported());
+            if (!supported) {
+                setPipSupported(false);
+                setPopUpMode(false);
+                updateFloatingTransitionState('error', 1400);
+                await pictureInPictureService.setAutoEnterEnabled(false);
+                showPiPBlockedPrompt('Picture-in-Picture is not supported or not available on this device.');
+                showOverlayControls();
+                resetControlsTimer();
+                return;
+            }
+
+            setPipSupported(true);
+            let resumedForPiP = false;
             try {
-                await new Promise((resolve) => setTimeout(resolve, 180));
-                await pictureInPictureService.enter(16, 9, true);
+                clearPiPEntryWatchdog();
+                pipEntryPendingRef.current = true;
+                await pictureInPictureService.setAutoEnterEnabled(false);
+                if (!statusRef.current.isPlaying && statusRef.current.isLoaded) {
+                    player.play();
+                    resumedForPiP = true;
+                    await new Promise((resolve) => setTimeout(resolve, 180));
+                }
+                await pictureInPictureService.enter(16, 9, statusRef.current.isPlaying);
                 await pictureInPictureService.setAutoEnterEnabled(true);
                 pipEntryTimeout.current = setTimeout(() => {
                     if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
                     clearPiPEntryWatchdog();
                     void pictureInPictureService.setAutoEnterEnabled(false);
                     setPopUpMode(false);
+                    updateFloatingTransitionState('error', 1400);
                     void pictureInPictureService.bringAppToFront().catch(() => { });
+                    void pictureInPictureService.isSupported().then(setPipSupported).catch(() => { });
                     showPiPBlockedPrompt('PiP could not be started on this device right now.');
                     showOverlayControls();
                     resetControlsTimer();
                 }, 1800);
-                return;
             } catch {
-                await pictureInPictureService.setAutoEnterEnabled(false);
-                setPopUpMode(false);
-                clearPiPEntryWatchdog();
-                if (resumedForPiP && statusRef.current.isLoaded) {
-                    player.pause();
+                try {
+                    await new Promise((resolve) => setTimeout(resolve, 180));
+                    await pictureInPictureService.enter(16, 9, true);
+                    await pictureInPictureService.setAutoEnterEnabled(true);
+                    pipEntryTimeout.current = setTimeout(() => {
+                        if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
+                        clearPiPEntryWatchdog();
+                        void pictureInPictureService.setAutoEnterEnabled(false);
+                        setPopUpMode(false);
+                        updateFloatingTransitionState('error', 1400);
+                        void pictureInPictureService.bringAppToFront().catch(() => { });
+                        showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                        showOverlayControls();
+                        resetControlsTimer();
+                    }, 1800);
+                    return;
+                } catch {
+                    await pictureInPictureService.setAutoEnterEnabled(false);
+                    setPopUpMode(false);
+                    updateFloatingTransitionState('error', 1400);
+                    clearPiPEntryWatchdog();
+                    if (resumedForPiP && statusRef.current.isLoaded) {
+                        player.pause();
+                    }
+                    // Some OEM ROMs may push app to background on failed PiP attempt.
+                    await pictureInPictureService.bringAppToFront().catch(() => { });
+                    const permissionEnabled = await pictureInPictureService.isPermissionEnabled();
+                    showPiPBlockedPrompt(
+                        permissionEnabled
+                            ? 'PiP could not be started right now on this device. Please disable battery restrictions and try again.'
+                            : 'PiP could not be started. Please allow Picture-in-Picture for this app.'
+                    );
+                    showOverlayControls();
+                    resetControlsTimer();
                 }
-                // Some OEM ROMs may push app to background on failed PiP attempt.
-                await pictureInPictureService.bringAppToFront().catch(() => { });
-                const permissionEnabled = await pictureInPictureService.isPermissionEnabled();
-                showPiPBlockedPrompt(
-                    permissionEnabled
-                        ? 'PiP could not be started right now on this device. Please disable battery restrictions and try again.'
-                        : 'PiP could not be started. Please allow Picture-in-Picture for this app.'
-                );
-                showOverlayControls();
-                resetControlsTimer();
             }
+        } catch {
+            setPopUpMode(false);
+            updateFloatingTransitionState('error', 1400);
+            showOverlayControls();
+            resetControlsTimer();
+            Alert.alert('Floating Player', 'Unable to start floating window on this device right now.');
+        } finally {
+            floatingToggleInFlightRef.current = false;
         }
     };
 
@@ -2237,11 +2320,13 @@ const PlayerScreen = () => {
                     return;
                 case 'app.mcai.videoplayer.pip.EXPAND':
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     showOverlayControls();
                     resetControlsTimer();
                     return;
                 case 'app.mcai.videoplayer.pip.CLOSE':
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     void pictureInPictureService.setAutoEnterEnabled(false);
                     if (statusRef.current.isLoaded && statusRef.current.isPlaying) {
                         player.pause();
@@ -2255,12 +2340,14 @@ const PlayerScreen = () => {
                         pipEntryTimeout.current = null;
                     }
                     setPopUpMode(true);
+                    updateFloatingTransitionState('active', 1300);
                     hideOverlayControls();
                     flashSeekFeedback('Floating Mode Enabled');
                     return;
                 case 'app.mcai.videoplayer.pip.STATE_EXITED':
                     clearPiPEntryWatchdog();
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     showOverlayControls();
                     resetControlsTimer();
                     return;
@@ -2281,6 +2368,7 @@ const PlayerScreen = () => {
                 const positionMs = Math.max(0, payload?.positionMs ?? 0);
                 if (action === 'app.mcai.videoplayer.overlay.EXPAND') {
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     if (statusRef.current.isLoaded) {
                         player.currentTime = positionMs / 1000;
                         player.play();
@@ -2291,6 +2379,7 @@ const PlayerScreen = () => {
                 }
                 if (action === 'app.mcai.videoplayer.overlay.CLOSE') {
                     setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
                     if (statusRef.current.isLoaded) {
                         player.currentTime = positionMs / 1000;
                     }
@@ -2343,6 +2432,52 @@ const PlayerScreen = () => {
         animatePanel(zoomPanelAnim, zoomPanelVisible);
     }, [zoomPanelVisible]);
 
+    // Pop-up player animation ─ springs in on open, fades out on close, scales on expand
+    useEffect(() => {
+        if (popUpMode) {
+            popupScaleAnim.setValue(0.2);
+            popupOpacityAnim.setValue(0);
+            setPopupExpanded(false);
+            Animated.parallel([
+                Animated.spring(popupScaleAnim, {
+                    toValue: 1,
+                    useNativeDriver: true,
+                    tension: 70,
+                    friction: 7,
+                }),
+                Animated.timing(popupOpacityAnim, {
+                    toValue: 1,
+                    duration: 180,
+                    useNativeDriver: true,
+                }),
+            ]).start();
+        } else {
+            setPopupExpanded(false);
+            Animated.parallel([
+                Animated.timing(popupScaleAnim, {
+                    toValue: 0.2,
+                    duration: 200,
+                    useNativeDriver: true,
+                }),
+                Animated.timing(popupOpacityAnim, {
+                    toValue: 0,
+                    duration: 160,
+                    useNativeDriver: true,
+                }),
+            ]).start();
+        }
+    }, [popUpMode]);
+
+    // Tap-to-expand: spring the size scale between 1.0 (mini) and 1.45 (expanded)
+    useEffect(() => {
+        Animated.spring(popupSizeScale, {
+            toValue: popupExpanded ? 1.45 : 1.0,
+            useNativeDriver: true,
+            tension: 75,
+            friction: 7,
+        }).start();
+    }, [popupExpanded]);
+
     const sceneInfo = detections.find((d) => d.type === 'scene');
     const actors = detections
         .filter((d) => d.type === 'person')
@@ -2355,6 +2490,8 @@ const PlayerScreen = () => {
     const sliderMaxMillis = Math.max(stableDurationMillis, status.durationMillis || 0, 1);
     const livePositionMillis = status.positionMillis || statusRef.current.positionMillis || 0;
     const displayPositionMillis = isSeeking ? seekPreviewPosition : livePositionMillis;
+    const isFloatingTransitionStarting = floatingTransitionState === 'starting';
+    const popUpModeLabel = isFloatingTransitionStarting ? 'Starting...' : popUpMode ? 'On' : 'Off';
     const videoFrameStyle = (() => {
         if (selectedDisplayMode.id === 'center') {
             return styles.centerVideo;
@@ -2399,29 +2536,57 @@ const PlayerScreen = () => {
                 onTouchEnd={handleTouchEnd}
                 onTouchCancel={handleTouchEnd}
             >
-                <View
-                    style={[
-                        styles.videoStage,
-                        audioOnlyMode && styles.videoStageAudioOnly,
-                    ]}
-                    pointerEvents="none"
-                >
-                    {!audioOnlyMode ? (
-                        <VideoView
-                            style={videoFrameStyle}
-                            player={player}
-                            nativeControls={false}
-                            contentFit={selectedDisplayMode.contentFit}
-                        />
-                    ) : (
-                        <View style={styles.audioOnlyCard}>
-                            <Ionicons name="musical-notes-outline" size={32} color={colors.primary} />
-                            <Text style={styles.audioOnlyTitle}>Audio Only Mode</Text>
-                            <Text style={styles.audioOnlyMeta}>{title || 'Playing in background mode'}</Text>
-                        </View>
-                    )}
-                </View>
+                {/* Full-screen video stage (normal mode) */}
+                {!popUpMode && (
+                    <Animated.View
+                        style={[styles.videoStage, audioOnlyMode && styles.videoStageAudioOnly]}
+                        pointerEvents="none"
+                    >
+                        {!audioOnlyMode ? (
+                            <VideoView
+                                style={videoFrameStyle}
+                                player={player}
+                                nativeControls={false}
+                                contentFit={selectedDisplayMode.contentFit}
+                            />
+                        ) : (
+                            <View style={styles.audioOnlyCard}>
+                                <Ionicons name="musical-notes-outline" size={32} color={colors.primary} />
+                                <Text style={styles.audioOnlyTitle}>Audio Only Mode</Text>
+                                <Text style={styles.audioOnlyMeta}>{title || 'Playing in background mode'}</Text>
+                            </View>
+                        )}
+                    </Animated.View>
+                )}
 
+                {/* Pop-up floating window (popup mode) */}
+                {popUpMode && (
+                    <Animated.View
+                        style={[
+                            styles.videoStagePopUp,
+                            {
+                                transform: [
+                                    { scale: popupScaleAnim },
+                                    { scale: popupSizeScale },
+                                ],
+                                opacity: popupOpacityAnim,
+                            },
+                        ]}
+                        pointerEvents="auto"
+                    >
+                        <Pressable
+                            style={{ flex: 1 }}
+                            onPress={() => setPopupExpanded((prev) => !prev)}
+                        >
+                            <VideoView
+                                style={styles.video}
+                                player={player}
+                                nativeControls={false}
+                                contentFit="contain"
+                            />
+                        </Pressable>
+                    </Animated.View>
+                )}
                 <AIOverlay
                     detections={detections}
                     videoDimensions={{ width: 1920, height: 1080 }}
@@ -2440,6 +2605,13 @@ const PlayerScreen = () => {
                 <Animated.View style={[styles.seekFeedbackBadge, { opacity: seekFeedbackOpacity }]}>
                     <Text style={styles.seekFeedbackText}>{seekFeedbackText}</Text>
                 </Animated.View>
+
+                {isFloatingTransitionStarting && (
+                    <View style={styles.floatingTransitionBadge} pointerEvents="none">
+                        <Ionicons name="sync-outline" size={14} color={colors.white} />
+                        <Text style={styles.floatingTransitionText}>Opening floating player...</Text>
+                    </View>
+                )}
 
                 {(abRepeatStartMs !== null || abRepeatEndMs !== null) && (
                     <View style={styles.abRepeatBadge}>
@@ -2978,9 +3150,20 @@ const PlayerScreen = () => {
                                             <Ionicons name="musical-note-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>Play as audio: {audioOnlyMode ? 'On' : 'Off'}</Text>
                                         </TouchableOpacity>
-                                        <TouchableOpacity style={styles.panelItem} onPress={() => void togglePopUpMode()}>
+                                        <TouchableOpacity
+                                            style={[styles.panelItem, isFloatingTransitionStarting && styles.disabledPanelItem]}
+                                            onPress={() => void togglePopUpMode()}
+                                            disabled={isFloatingTransitionStarting}
+                                        >
                                             <Ionicons name="tv-outline" size={18} color={colors.white} />
-                                            <Text style={styles.panelItemText}>Pop-up player: {popUpMode ? 'On' : 'Off'}</Text>
+                                            <Text
+                                                style={[
+                                                    styles.panelItemText,
+                                                    isFloatingTransitionStarting && styles.disabledPanelItemText,
+                                                ]}
+                                            >
+                                                Pop-up player: {popUpModeLabel}
+                                            </Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity style={styles.panelItem} onPress={cycleRepeatMode}>
                                             <Ionicons name="repeat-outline" size={18} color={colors.white} />
@@ -3282,7 +3465,14 @@ const PlayerScreen = () => {
                     )}
                 </Animated.View>
             </Pressable>
-
+            <AIOverlay
+                detections={detections}
+                videoDimensions={{ width: viewDimensions.width, height: viewDimensions.height }}
+                viewDimensions={viewDimensions}
+                visible={detections.length > 0}
+                isAnalyzing={isAiAnalyzing}
+                onClose={handleCloseAI}
+            />
         </View>
     );
 };
@@ -3302,19 +3492,22 @@ const useStyles = (colors: any) => StyleSheet.create({
         justifyContent: 'center',
     },
     videoStagePopUp: {
+        position: 'absolute',
+        bottom: 80,
+        right: 16,
         width: POPUP_WIDTH,
         height: POPUP_HEIGHT,
-        borderRadius: 16,
+        borderRadius: 14,
         overflow: 'hidden',
         borderWidth: 1.5,
-        borderColor: 'rgba(255,255,255,0.15)',
+        borderColor: 'rgba(255,255,255,0.18)',
         backgroundColor: '#000',
         zIndex: 25,
-        elevation: 12,
+        elevation: 16,
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.5,
-        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.6,
+        shadowRadius: 14,
     },
     videoStageAudioOnly: {
         backgroundColor: '#000',
@@ -3366,6 +3559,26 @@ const useStyles = (colors: any) => StyleSheet.create({
     seekFeedbackText: {
         color: colors.white,
         fontSize: FONT_SIZE.l,
+        fontWeight: FONT_WEIGHT.bold,
+        letterSpacing: LETTER_SPACING.wide,
+    },
+    floatingTransitionBadge: {
+        position: 'absolute',
+        top: 74,
+        alignSelf: 'center',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: SPACING.s,
+        paddingVertical: 6,
+        borderRadius: RADIUS.full,
+        backgroundColor: 'rgba(0,0,0,0.72)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.15)',
+    },
+    floatingTransitionText: {
+        color: colors.white,
+        fontSize: FONT_SIZE.xs,
         fontWeight: FONT_WEIGHT.bold,
         letterSpacing: LETTER_SPACING.wide,
     },

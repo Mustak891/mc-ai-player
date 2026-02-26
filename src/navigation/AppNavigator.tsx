@@ -6,7 +6,9 @@ import { Linking } from 'react-native';
 
 import BottomTabNavigator from './BottomTabNavigator';
 import PlayerScreen from '../screens/PlayerScreen';
+import TermsAndConditionsScreen from '../screens/TermsAndConditionsScreen';
 import { RootStackParamList } from './types';
+import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
 import { useThemeContext } from '../context/ThemeContext';
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -63,6 +65,8 @@ const AppNavigator = ({ initialState }: AppNavigatorProps) => {
                         gestureEnabled: false,
                     }}
                 />
+                <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+                <Stack.Screen name="TermsAndConditions" component={TermsAndConditionsScreen} />
             </Stack.Navigator>
         </NavigationContainer>
     );

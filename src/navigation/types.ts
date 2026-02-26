@@ -5,6 +5,8 @@ export type RootStackParamList = {
         title?: string;
         subtitleCandidates?: Array<{ uri: string; name: string }>;
     };
+    PrivacyPolicy: undefined;
+    TermsAndConditions: undefined;
 };
 
 export type BottomTabParamList = {

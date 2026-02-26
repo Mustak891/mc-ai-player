@@ -1,5 +1,8 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Linking, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
+import { RootStackParamList } from '../navigation/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -9,6 +12,7 @@ import { useThemeContext } from '../context/ThemeContext';
 const MoreScreen = () => {
     const { colors, isDark } = useThemeContext();
     const insets = useSafeAreaInsets();
+    const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
     const styles = useStyles(colors, insets);
     const handlePlaceholder = (feature: string) => {
         Alert.alert('Coming Soon', `${feature} will be available in a future update.`);
@@ -63,13 +67,13 @@ const MoreScreen = () => {
                     <SettingRow
                         icon="document-text"
                         label="Terms of Service"
-                        onPress={() => handlePlaceholder('Terms of Service')}
+                        onPress={() => navigation.navigate('TermsAndConditions')}
                     />
                     <View style={styles.divider} />
                     <SettingRow
                         icon="shield-checkmark"
                         label="Privacy Policy"
-                        onPress={() => handlePlaceholder('Privacy Policy')}
+                        onPress={() => navigation.navigate('PrivacyPolicy')}
                     />
                 </View>
 
@@ -85,7 +89,7 @@ const MoreScreen = () => {
                     <SettingRow
                         icon="logo-github"
                         label="View Source Code"
-                        onPress={() => Linking.openURL('https://github.com').catch(() => handlePlaceholder('Source code link'))}
+                        onPress={() => Linking.openURL('https://github.com/Mustak891/mc-ai-player').catch(() => handlePlaceholder('Source code link'))}
                     />
                 </View>
 

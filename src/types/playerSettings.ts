@@ -5,6 +5,8 @@ export type PlayerControlSettings = {
     saveAudioDelayPerVideo: boolean;
     automaticResumePlayback: boolean;
     resumeMode: ResumeMode;
+    floatingControlsDefaultVisible: boolean;
+    floatingControlAutoHideMs: number;
     gestureVolumeEnabled: boolean;
     gestureBrightnessEnabled: boolean;
     swipeToSeekEnabled: boolean;
@@ -49,6 +51,8 @@ export const DEFAULT_PLAYER_CONTROL_SETTINGS: PlayerControlSettings = {
     saveAudioDelayPerVideo: true,
     automaticResumePlayback: true,
     resumeMode: 'prompt_after_24h',
+    floatingControlsDefaultVisible: true,
+    floatingControlAutoHideMs: 3000,
     gestureVolumeEnabled: true,
     gestureBrightnessEnabled: true,
     swipeToSeekEnabled: true,
@@ -61,7 +65,7 @@ export const DEFAULT_PLAYER_CONTROL_SETTINGS: PlayerControlSettings = {
     videoTransitionTitleEnabled: true,
     lockWithSensorEnabled: true,
     doubleTapCenterPlayPauseEnabled: false,
-    seekStepSeconds: 5,
+    seekStepSeconds: 10,
     longPressSeekStepSeconds: 20,
     fastPlaySpeed: 2,
     globalSubtitleDelayMs: 0,

@@ -12,6 +12,15 @@ const sanitize = (partial: Partial<PlayerControlSettings>): PlayerControlSetting
         ...partial,
     };
 
+    merged.floatingControlsDefaultVisible =
+        typeof merged.floatingControlsDefaultVisible === 'boolean'
+            ? merged.floatingControlsDefaultVisible
+            : DEFAULT_PLAYER_CONTROL_SETTINGS.floatingControlsDefaultVisible;
+    merged.floatingControlAutoHideMs = clamp(
+        Math.floor(merged.floatingControlAutoHideMs || 0),
+        1000,
+        10000
+    );
     merged.controlsHideDelayMs = clamp(Math.floor(merged.controlsHideDelayMs || 0), 1000, 10000);
     merged.seekStepSeconds = clamp(Math.floor(merged.seekStepSeconds || 0), 1, 30);
     merged.longPressSeekStepSeconds = clamp(Math.floor(merged.longPressSeekStepSeconds || 0), 5, 120);
@@ -40,4 +49,3 @@ export const savePlayerControlSettings = async (settings: PlayerControlSettings)
         // Best effort only.
     }
 };
-

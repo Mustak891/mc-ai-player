@@ -52,7 +52,7 @@ class FloatingPlayerService : Service() {
   private var overlayParams: WindowManager.LayoutParams? = null
 
   // Close target (bottom X bubble)
-  private var closeTarget: FrameLayout? = null
+  private var closeTarget: View? = null
   private var closeTargetParams: WindowManager.LayoutParams? = null
   private var closePulseAnimator: ObjectAnimator? = null
 
@@ -67,15 +67,16 @@ class FloatingPlayerService : Service() {
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val hideControlsRunnable = Runnable { hideControls() }
+  private val controlsAutoHideMs = 3000L
 
   // ─── Scalable Window Sizes ────────────────────────────────────────────────
-  // The Window is sized for the "Expanded" state so scaling doesn't clip.
-  // Minimal state = 0.92 scale. Expanded state = 1.0 scale.
+  // Keep a stable size/anchor to avoid perceptual jump on entry.
   private val WIN_W_DP = 300f
   private val WIN_H_DP = 169f // ~16:9 aspect ratio
 
-  private val SCALE_MINIMAL = 0.92f
-  private val SCALE_EXPANDED = 1.0f
+  private val ENTRY_TRANSLATE_DP = 6f
+  private val DRAG_ALPHA = 0.96f
+  private val CLOSE_ZONE_ALPHA = 0.82f
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -120,8 +121,8 @@ class FloatingPlayerService : Service() {
     playPauseIconView?.setPlaying(player?.isPlaying == true)
     playPauseIconView?.invalidate()
 
-    // Start minimal – no controls, scaled down
-    hideControls(animate = false)
+    // Start with rich controls visible immediately.
+    showControls(animate = false)
   }
 
   // ─── View construction ────────────────────────────────────────────────────
@@ -142,7 +143,8 @@ class FloatingPlayerService : Service() {
       width, height, type,
       WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
       PixelFormat.TRANSLUCENT
     ).apply {
       gravity = Gravity.TOP or Gravity.START
@@ -161,11 +163,7 @@ class FloatingPlayerService : Service() {
       clipToOutline = true
       elevation = dp(12f).toFloat()
       alpha  = 0f
-      scaleX = SCALE_MINIMAL
-      scaleY = SCALE_MINIMAL
-      // Pivot center for scaling
-      pivotX = width / 2f
-      pivotY = height / 2f
+      translationY = dp(ENTRY_TRANSLATE_DP).toFloat()
     }
 
     // ── Video surface ───────────────────────────────────────────────────────
@@ -195,55 +193,52 @@ class FloatingPlayerService : Service() {
     }
 
     // ┌── Top row: Settings (left) ──────────────────────────────────────────
-    val settingsBtn = IconButton(this, IconType.SETTINGS, dp(40f)).apply {
-      layoutParams = FrameLayout.LayoutParams(dp(40f), dp(40f), Gravity.TOP or Gravity.START).apply {
+    val settingsBtn = IconButton(this, IconType.SETTINGS, dp(36f)).apply {
+      layoutParams = FrameLayout.LayoutParams(dp(36f), dp(36f), Gravity.TOP or Gravity.START).apply {
         topMargin   = dp(8f)
-        marginStart = dp(12f)
+        marginStart = dp(10f)
       }
       setOnClickListener { openOverlaySettings(); showControls() }
     }
 
     // ┌── Top row: Expand (right) ───────────────────────────────────────────
-    val expandBtn = IconButton(this, IconType.EXPAND, dp(40f)).apply {
-      layoutParams = FrameLayout.LayoutParams(dp(40f), dp(40f), Gravity.TOP or Gravity.END).apply {
+    val expandBtn = IconButton(this, IconType.EXPAND, dp(36f)).apply {
+      layoutParams = FrameLayout.LayoutParams(dp(36f), dp(36f), Gravity.TOP or Gravity.END).apply {
         topMargin  = dp(8f)
-        marginEnd  = dp(12f)
+        marginEnd  = dp(10f)
       }
       setOnClickListener { expandToApp() }
     }
 
-    // ┌── Center: Play/Pause ────────────────────────────────────────────────
-    val playPauseBtn = IconButton(this, IconType.PLAY, dp(64f)).apply {
-      layoutParams = FrameLayout.LayoutParams(dp(64f), dp(64f), Gravity.CENTER)
-      setOnClickListener { togglePlay(); showControls() }
-    }
-    playPauseIconView = playPauseBtn.iconView
-
-    // ┌── Bottom row: Rewind | Forward ──────────────────────────────────────
+    // ┌── Bottom row: Rewind | Play/Pause | Forward | Close ─────────────────
     val bottomRow = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
-      gravity     = Gravity.CENTER
+      gravity     = Gravity.CENTER_VERTICAL
       layoutParams = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.WRAP_CONTENT,
         FrameLayout.LayoutParams.WRAP_CONTENT,
         Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-      ).apply { bottomMargin = dp(16f) }
+      ).apply { bottomMargin = dp(14f) }
     }
 
     val rewindBtn = IconButton(this, IconType.REWIND, dp(48f)).apply {
       setOnClickListener { seekByMs(-10_000L); showControls() }
     }
+    val playPauseBtn = IconButton(this, IconType.PLAY, dp(56f)).apply {
+      setOnClickListener { togglePlay(); showControls() }
+    }
+    playPauseIconView = playPauseBtn.iconView
     val forwardBtn = IconButton(this, IconType.FORWARD, dp(48f)).apply {
       setOnClickListener { seekByMs(10_000L); showControls() }
     }
-
     bottomRow.addView(rewindBtn)
-    bottomRow.addView(gap(24))
+    bottomRow.addView(gap(12))
+    bottomRow.addView(playPauseBtn)
+    bottomRow.addView(gap(12))
     bottomRow.addView(forwardBtn)
 
     controls.addView(settingsBtn)
     controls.addView(expandBtn)
-    controls.addView(playPauseBtn)
     controls.addView(bottomRow)
 
     root.addView(pv)
@@ -258,66 +253,69 @@ class FloatingPlayerService : Service() {
     // Entry animation
     root.animate()
       .alpha(1f)
-      .scaleX(SCALE_MINIMAL)
-      .scaleY(SCALE_MINIMAL)
-      .setDuration(300L)
-      .setInterpolator(OvershootInterpolator(0.8f))
+      .translationY(0f)
+      .setDuration(170L)
+      .setInterpolator(DecelerateInterpolator())
       .start()
   }
 
   // ─── Touch handler ────────────────────────────────────────────────────────
   private fun setupTouch(surface: View) {
-    var startParamX = 0
-    var startParamY = 0
-    var touchX = 0f
-    var touchY = 0f
-    var moved  = false
-    var downTimeMs = 0L
+    // Track last event position (not fixed origin) for per-frame delta.
+    // This ensures every MOVE applies only the incremental delta, giving
+    // pixel-perfect 1:1 tracking with zero lag.
+    var lastRawX  = 0f
+    var lastRawY  = 0f
+    var moved     = false
+    var downTimeMs= 0L
 
     surface.setOnTouchListener { _, event ->
       val params = overlayParams ?: return@setOnTouchListener false
+      val dm     = resources.displayMetrics
+
       when (event.action) {
 
         MotionEvent.ACTION_DOWN -> {
-          moved        = false
-          isDragging   = false
-          startParamX  = params.x
-          startParamY  = params.y
-          touchX       = event.rawX
-          touchY       = event.rawY
-          downTimeMs   = System.currentTimeMillis()
+          moved       = false
+          isDragging  = false
+          lastRawX    = event.rawX
+          lastRawY    = event.rawY
+          downTimeMs  = System.currentTimeMillis()
+          // Cancel any in-progress snap animation immediately
+          surface.animate().cancel()
           true
         }
 
         MotionEvent.ACTION_MOVE -> {
-          val dx = (event.rawX - touchX).toInt()
-          val dy = (event.rawY - touchY).toInt()
+          // Per-event delta (not cumulative from finger-down origin)
+          val dx = (event.rawX - lastRawX).toInt()
+          val dy = (event.rawY - lastRawY).toInt()
+          lastRawX = event.rawX
+          lastRawY = event.rawY
 
-          if (!moved && (abs(dx) > 8 || abs(dy) > 8)) {
+          if (!moved && (abs(dx) > 6 || abs(dy) > 6)) {
             moved      = true
             isDragging = true
             showCloseTarget()
-            // If dragging starts, shrink slightly to signify lift
-            surface.animate().cancel()
-            surface.animate().scaleX(SCALE_MINIMAL).scaleY(SCALE_MINIMAL).alpha(0.92f).setDuration(120).start()
+            // Set alpha directly — no View.animate() competing with position updates
+            surface.alpha = DRAG_ALPHA
           }
 
           if (moved) {
-            params.x = startParamX + dx
-            params.y = startParamY + dy
+            params.x = (params.x + dx).coerceIn(0, dm.widthPixels  - params.width)
+            params.y = (params.y + dy).coerceIn(0, dm.heightPixels - params.height)
             windowManager?.updateViewLayout(overlayRoot, params)
 
             if (isOverlayNearCloseTarget()) {
               updateCloseTargetHighlight(true)
-              // Magnetic snap to X
-              val dm      = resources.displayMetrics
-              val targetParams = closeTargetParams
-              if (targetParams != null) {
-                  val targetX = (dm.widthPixels / 2) - (params.width / 2)
-                  val targetY = dm.heightPixels - targetParams.y - params.height - dp(20f) // Just above the X
-                  params.x   = (params.x * 0.65f + targetX * 0.35f).toInt()
-                  params.y   = (params.y * 0.65f + targetY * 0.35f).toInt()
-                  windowManager?.updateViewLayout(overlayRoot, params)
+              // Magnetic snap toward X — gentle pull
+              val targetX = (dm.widthPixels / 2) - (params.width / 2)
+              val ctp = closeTargetParams
+              if (ctp != null) {
+                val targetY = dm.heightPixels - ctp.y - params.height - dp(20f)
+                params.x = (params.x * 0.7f + targetX * 0.3f).toInt()
+                params.y = (params.y * 0.7f + targetY * 0.3f).toInt()
+                windowManager?.updateViewLayout(overlayRoot, params)
               }
             } else {
               updateCloseTargetHighlight(false)
@@ -342,9 +340,8 @@ class FloatingPlayerService : Service() {
           if (wasTap) {
             if (controlsVisible) hideControls() else showControls()
           } else {
-            // Restore scale/alpha after drag
-            val targetScale = if (controlsVisible) SCALE_EXPANDED else SCALE_MINIMAL
-            surface.animate().scaleX(targetScale).scaleY(targetScale).alpha(1f).setDuration(150).start()
+            // Restore alpha and snap — smooth spring to nearest edge
+            surface.animate().alpha(1f).setDuration(150).setInterpolator(DecelerateInterpolator()).start()
             snapToNearestEdge()
           }
           true
@@ -356,27 +353,22 @@ class FloatingPlayerService : Service() {
   }
 
   // ─── Controls show/hide (Tap to enlarge) ──────────────────────────────────
-  private fun showControls() {
+  private fun showControls(animate: Boolean = true) {
     val controls = controlsLayer ?: return
     controlsVisible = true
     controls.visibility = View.VISIBLE
     controls.animate().cancel()
     overlayRoot?.animate()?.cancel()
 
-    // Fade in controls
-    controls.animate()
-      .alpha(1f)
-      .setDuration(180L)
-      .setInterpolator(DecelerateInterpolator())
-      .start()
-
-    // Enlarge window (scale up)
-    overlayRoot?.animate()
-      ?.scaleX(SCALE_EXPANDED)
-      ?.scaleY(SCALE_EXPANDED)
-      ?.setDuration(220L)
-      ?.setInterpolator(OvershootInterpolator(0.6f))
-      ?.start()
+    if (animate) {
+      controls.animate()
+        .alpha(1f)
+        .setDuration(170L)
+        .setInterpolator(DecelerateInterpolator())
+        .start()
+    } else {
+      controls.alpha = 1f
+    }
 
     scheduleHideControls()
   }
@@ -391,29 +383,19 @@ class FloatingPlayerService : Service() {
     if (animate) {
       controls.animate()
         .alpha(0f)
-        .setDuration(180L)
+        .setDuration(160L)
         .setInterpolator(DecelerateInterpolator())
         .withEndAction { if (!controlsVisible) controls.visibility = View.GONE }
         .start()
-
-      // Shrink window (scale down)
-      overlayRoot?.animate()
-        ?.scaleX(SCALE_MINIMAL)
-        ?.scaleY(SCALE_MINIMAL)
-        ?.setDuration(200L)
-        ?.setInterpolator(DecelerateInterpolator())
-        ?.start()
     } else {
       controls.alpha = 0f
       controls.visibility = View.GONE
-      overlayRoot?.scaleX = SCALE_MINIMAL
-      overlayRoot?.scaleY = SCALE_MINIMAL
     }
   }
 
   private fun scheduleHideControls() {
     mainHandler.removeCallbacks(hideControlsRunnable)
-    mainHandler.postDelayed(hideControlsRunnable, 3000L)
+    mainHandler.postDelayed(hideControlsRunnable, controlsAutoHideMs)
   }
 
   // ─── Close target (Red Bubble with X) ─────────────────────────────────────
@@ -423,41 +405,43 @@ class FloatingPlayerService : Service() {
     val type = overlayWindowType()
     val size = dp(80f)
 
-    // Red bubble container
-    val container = FrameLayout(this).apply {
-        // Red circle with shadow
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(Color.parseColor("#EE4444")) // Red
-            setStroke(dp(2f), Color.WHITE)
+    // Glassmorphism close target — single canvas view (circle + X)
+    val container = object : View(this) {
+        private val circlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#CC1A1A1A")   // ~80% opaque dark — frosted
         }
-        elevation = dp(8f).toFloat()
+        private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1f).toFloat()
+            color = Color.parseColor("#55FFFFFF")   // Subtle white rim
+        }
+        private val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2.2f).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            color = Color.WHITE
+        }
+        override fun onDraw(canvas: Canvas) {
+            val cx  = width / 2f
+            val cy  = height / 2f
+            val rad = minOf(width, height) / 2f - dp(4f)
+            // Frosted glass circle
+            canvas.drawCircle(cx, cy, rad, circlePaint)
+            canvas.drawCircle(cx, cy, rad, borderPaint)
+            // Crisp centered X — arms at 38% of radius
+            val arm = rad * 0.38f
+            canvas.drawLine(cx - arm, cy - arm, cx + arm, cy + arm, xPaint)
+            canvas.drawLine(cx + arm, cy - arm, cx - arm, cy + arm, xPaint)
+        }
+    }.apply {
         alpha = 0f
         scaleX = 0f
         scaleY = 0f
         translationY = dp(60f).toFloat()
     }
 
-    // White X icon
-    val xIcon = object : View(this) {
-        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            strokeWidth = dp(4f).toFloat()
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-        }
-        override fun onDraw(canvas: Canvas) {
-            val cx = width / 2f
-            val cy = height / 2f
-            val r  = minOf(width, height) * 0.28f
-            canvas.drawLine(cx - r, cy - r, cx + r, cy + r, paint)
-            canvas.drawLine(cx + r, cy - r, cx - r, cy + r, paint)
-        }
-    }.apply {
-        layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-    }
-
-    container.addView(xIcon)
+    // Use container directly (no child FrameLayout needed)
 
     val params = WindowManager.LayoutParams(
       size, size, type,
@@ -525,12 +509,10 @@ class FloatingPlayerService : Service() {
       ?.setInterpolator(DecelerateInterpolator())
       ?.start()
     
-    // Suck effect on video
+    // Subtle focus effect near close target without resizing the overlay.
     overlayRoot?.animate()
-        ?.scaleX(if(active) 0.6f else SCALE_MINIMAL)
-        ?.scaleY(if(active) 0.6f else SCALE_MINIMAL)
-        ?.alpha(if(active) 0.6f else 0.94f)
-        ?.setDuration(160)
+        ?.alpha(if(active) CLOSE_ZONE_ALPHA else 1f)
+        ?.setDuration(120)
         ?.start()
   }
 
@@ -575,9 +557,8 @@ class FloatingPlayerService : Service() {
     if (view != null) {
       view.animate()
         .alpha(0f)
-        .scaleX(0.5f)
-        .scaleY(0.5f)
-        .setDuration(220L)
+        .translationY(dp(12f).toFloat())
+        .setDuration(180L)
         .setListener(object : AnimatorListenerAdapter() {
           override fun onAnimationEnd(animation: Animator) {
             try { windowManager?.removeView(view) } catch (_: Exception) {}
@@ -636,13 +617,16 @@ class FloatingPlayerService : Service() {
     val params = overlayParams ?: return
     val startX = params.x
     val startY = params.y
+    // Spring-physics snap: fast start, decelerates smoothly
+    val snapDuration = (120 + hypot((targetX - startX).toDouble(), (targetY - startY).toDouble()).toInt()
+        .coerceIn(0, 180)).toLong()
     ValueAnimator.ofFloat(0f, 1f).apply {
-      duration    = 250L
-      interpolator= DecelerateInterpolator()
+      duration     = snapDuration
+      interpolator = DecelerateInterpolator(2.2f)
       addUpdateListener {
-        val t   = it.animatedValue as Float
-        params.x= (startX + (targetX - startX) * t).toInt()
-        params.y= (startY + (targetY - startY) * t).toInt()
+        val t    = it.animatedValue as Float
+        params.x = (startX + (targetX - startX) * t).toInt()
+        params.y = (startY + (targetY - startY) * t).toInt()
         windowManager?.updateViewLayout(overlayRoot, params)
       }
       start()
@@ -711,7 +695,7 @@ class FloatingPlayerService : Service() {
     }
   }
 
-  enum class IconType { PLAY, PAUSE, REWIND, FORWARD, SETTINGS, EXPAND }
+  enum class IconType { PLAY, PAUSE, REWIND, FORWARD, SETTINGS, EXPAND, CLOSE }
 
   inner class IconView(context: Context, private var iconType: IconType) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -795,26 +779,56 @@ class FloatingPlayerService : Service() {
         }
 
         IconType.SETTINGS -> {
-          strokePaint.strokeWidth = minOf(w, h) * 0.08f
-          strokePaint.style = Paint.Style.STROKE
-          canvas.drawCircle(cx, cy, minOf(w,h) * 0.25f, strokePaint)
-          // Add some simple lines for teeth
-          for (i in 0 until 8) {
-              canvas.save()
-              canvas.rotate(i * 45f, cx, cy)
-              canvas.drawLine(cx, cy - minOf(w,h)*0.25f, cx, cy - minOf(w,h)*0.35f, strokePaint)
-              canvas.restore()
+          // 3-line equalizer/slider icon — clean, modern, universally readable
+          strokePaint.strokeWidth = minOf(w, h) * 0.075f
+          strokePaint.style  = Paint.Style.STROKE
+          strokePaint.strokeCap = Paint.Cap.ROUND
+          val lineHalfLen = minOf(w, h) * 0.28f
+          val dotR        = minOf(w, h) * 0.075f
+          val yOffsets    = listOf(-minOf(w,h)*0.19f, 0f, minOf(w,h)*0.19f)
+          // Handle X positions (stagger for visual interest)
+          val dotXOffsets = listOf(minOf(w,h)*0.06f, -minOf(w,h)*0.1f, minOf(w,h)*0.12f)
+
+          yOffsets.forEachIndexed { i, yOff ->
+            val dotX = cx + dotXOffsets[i]
+            // Left segment
+            canvas.drawLine(cx - lineHalfLen, cy + yOff, dotX - dotR * 1.6f, cy + yOff, strokePaint)
+            // Right segment
+            canvas.drawLine(dotX + dotR * 1.6f, cy + yOff, cx + lineHalfLen, cy + yOff, strokePaint)
+            // Filled circle handle
+            paint.color = Color.WHITE
+            canvas.drawCircle(dotX, cy + yOff, dotR, paint)
           }
         }
 
         IconType.EXPAND -> {
-            strokePaint.strokeWidth = minOf(w, h) * 0.08f
-            strokePaint.style = Paint.Style.STROKE
-            val r = minOf(w, h) * 0.25f
-            canvas.drawRect(cx - r, cy - r, cx + r, cy + r, strokePaint)
-            // Arrows
-            strokePaint.strokeWidth = minOf(w, h) * 0.06f
-            canvas.drawLine(cx - r + 4, cy + r - 4, cx + r - 4, cy - r + 4, strokePaint)
+          // Standard 4-corner bracket fullscreen icon — universally recognized
+          strokePaint.strokeWidth = minOf(w, h) * 0.09f
+          strokePaint.style  = Paint.Style.STROKE
+          strokePaint.strokeCap = Paint.Cap.ROUND
+          strokePaint.strokeJoin = Paint.Join.ROUND
+          val r = minOf(w, h) * 0.27f  // distance from center to corner tip
+          val s = minOf(w, h) * 0.14f  // arm length (L-shape)
+          // Top-left
+          canvas.drawLine(cx - r + s, cy - r, cx - r, cy - r, strokePaint)
+          canvas.drawLine(cx - r,     cy - r, cx - r, cy - r + s, strokePaint)
+          // Top-right
+          canvas.drawLine(cx + r - s, cy - r, cx + r, cy - r, strokePaint)
+          canvas.drawLine(cx + r,     cy - r, cx + r, cy - r + s, strokePaint)
+          // Bottom-left
+          canvas.drawLine(cx - r + s, cy + r, cx - r, cy + r, strokePaint)
+          canvas.drawLine(cx - r,     cy + r, cx - r, cy + r - s, strokePaint)
+          // Bottom-right
+          canvas.drawLine(cx + r - s, cy + r, cx + r, cy + r, strokePaint)
+          canvas.drawLine(cx + r,     cy + r, cx + r, cy + r - s, strokePaint)
+        }
+
+        IconType.CLOSE -> {
+          strokePaint.strokeWidth = minOf(w, h) * 0.12f
+          strokePaint.style = Paint.Style.STROKE
+          val r = minOf(w, h) * 0.22f
+          canvas.drawLine(cx - r, cy - r, cx + r, cy + r, strokePaint)
+          canvas.drawLine(cx + r, cy - r, cx - r, cy + r, strokePaint)
         }
       }
     }
