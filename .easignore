@@ -8,8 +8,6 @@ dist
 web-build
 
 # Local and generated native build folders
-android
-ios
 .gradle
 android/.gradle
 android/build
