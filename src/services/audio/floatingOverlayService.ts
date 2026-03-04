@@ -9,9 +9,14 @@ type FloatingOverlayModule = {
 };
 
 const getModule = (): FloatingOverlayModule | null => {
-    const mod = (NativeModules as any)?.McAiFloatingOverlay;
-    if (!mod) return null;
-    return mod as FloatingOverlayModule;
+    // In New Architecture (TurboModules), NativeModules may not be populated.
+    // Access via the global __turboModuleProxy as a reliable fallback.
+    const turboProxy = (global as any).__turboModuleProxy;
+    const mod: FloatingOverlayModule | null | undefined =
+        (turboProxy?.('McAiFloatingOverlay') as FloatingOverlayModule | null) ??
+        (NativeModules as any)?.McAiFloatingOverlay ??
+        null;
+    return mod ?? null;
 };
 
 export const floatingOverlayService = {
