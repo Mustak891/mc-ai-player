@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from 'react-native';
+import { Linking, NativeModules, Platform } from 'react-native';
 
 type PiPModule = {
     isSupported: () => Promise<boolean>;
@@ -16,16 +16,28 @@ const getModule = (): PiPModule | null => {
     return mod as PiPModule;
 };
 
+const isAndroidApiLevelPipCapable = () => {
+    if (Platform.OS !== 'android') return false;
+    const version = Platform.Version;
+    return typeof version === 'number' && version >= 26;
+};
+
 export const pictureInPictureService = {
+    isNativeModuleAvailable(): boolean {
+        return Platform.OS === 'android' && !!getModule();
+    },
+
     async isSupported(): Promise<boolean> {
         if (Platform.OS !== 'android') return false;
         const mod = getModule();
-        if (!mod?.isSupported) return false;
-        try {
-            return await mod.isSupported();
-        } catch {
-            return false;
+        if (mod?.isSupported) {
+            try {
+                return await mod.isSupported();
+            } catch {
+                // Some OEMs throw here; fall back to API-level capability.
+            }
         }
+        return isAndroidApiLevelPipCapable();
     },
 
     async setAutoEnterEnabled(enabled: boolean): Promise<void> {
@@ -49,7 +61,9 @@ export const pictureInPictureService = {
     async enter(width = 16, height = 9, isPlaying = true): Promise<void> {
         if (Platform.OS !== 'android') return;
         const mod = getModule();
-        if (!mod?.enter) return;
+        if (!mod?.enter) {
+            throw new Error('PiP native module is unavailable in this build.');
+        }
         await mod.enter(width, height, isPlaying);
     },
 
@@ -63,8 +77,15 @@ export const pictureInPictureService = {
     async openSettings(): Promise<void> {
         if (Platform.OS !== 'android') return;
         const mod = getModule();
-        if (!mod?.openSettings) return;
-        await mod.openSettings();
+        try {
+            if (mod?.openSettings) {
+                await mod.openSettings();
+                return;
+            }
+        } catch {
+            // fall through to generic app settings
+        }
+        await Linking.openSettings();
     },
 
     async bringAppToFront(): Promise<void> {

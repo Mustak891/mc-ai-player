@@ -1,19 +1,21 @@
 package app.mcai.videoplayer
 
+import expo.modules.splashscreen.SplashScreenManager
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.content.res.Configuration
+import android.provider.Settings
 
 import com.facebook.react.ReactActivity
-import com.facebook.react.ReactApplication
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
-import com.facebook.react.modules.core.DeviceEventManagerModule
 
 import expo.modules.ReactActivityDelegateWrapper
 
@@ -21,20 +23,30 @@ class MainActivity : ReactActivity() {
   private val pipReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       when (intent?.action) {
-        PictureInPictureController.ACTION_EXPAND -> {
-          emitPipActionToJs(intent.action ?: "")
-          val launch = packageManager.getLaunchIntentForPackage(packageName)
-          if (launch != null) {
-            launch.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-            startActivity(launch)
-          }
+        PictureInPictureController.ACTION_BACKWARD -> {
+          emitPipActionToJs(PictureInPictureController.ACTION_BACKWARD)
         }
+
+        PictureInPictureController.ACTION_PLAY_PAUSE -> {
+          emitPipActionToJs(PictureInPictureController.ACTION_PLAY_PAUSE)
+        }
+
+        PictureInPictureController.ACTION_FORWARD -> {
+          emitPipActionToJs(PictureInPictureController.ACTION_FORWARD)
+        }
+
+        PictureInPictureController.ACTION_SETTINGS -> {
+          openPictureInPictureSettings()
+        }
+
         PictureInPictureController.ACTION_CLOSE -> {
-          emitPipActionToJs(intent.action ?: "")
+          emitPipActionToJs(PictureInPictureController.ACTION_CLOSE)
           PictureInPictureController.autoEnterEnabled = false
         }
-        PictureInPictureController.ACTION_PLAY_PAUSE -> {
-          emitPipActionToJs(intent.action ?: "")
+
+        PictureInPictureController.ACTION_EXPAND -> {
+          emitPipActionToJs(PictureInPictureController.ACTION_EXPAND)
+          bringTaskToFront()
         }
       }
     }
@@ -44,7 +56,10 @@ class MainActivity : ReactActivity() {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
     // This is required for expo-splash-screen.
-    setTheme(R.style.AppTheme);
+    // setTheme(R.style.AppTheme);
+    // @generated begin expo-splashscreen - expo prebuild (DO NOT MODIFY) sync-f3ff59a738c56c9a6119210cb55f0b613eb8b6af
+    SplashScreenManager.registerOnActivity(this)
+    // @generated end expo-splashscreen
     super.onCreate(null)
     registerPipReceiver()
   }
@@ -98,7 +113,10 @@ class MainActivity : ReactActivity() {
     }
   }
 
-  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
+  override fun onPictureInPictureModeChanged(
+    isInPictureInPictureMode: Boolean,
+    newConfig: Configuration
+  ) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     emitPipActionToJs(
       if (isInPictureInPictureMode) {
@@ -110,15 +128,18 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
-    super.onDestroy()
     try {
       unregisterReceiver(pipReceiver)
     } catch (_: Exception) {}
+    super.onDestroy()
   }
 
   private fun registerPipReceiver() {
     val filter = IntentFilter().apply {
+      addAction(PictureInPictureController.ACTION_BACKWARD)
       addAction(PictureInPictureController.ACTION_PLAY_PAUSE)
+      addAction(PictureInPictureController.ACTION_FORWARD)
+      addAction(PictureInPictureController.ACTION_SETTINGS)
       addAction(PictureInPictureController.ACTION_EXPAND)
       addAction(PictureInPictureController.ACTION_CLOSE)
     }
@@ -130,12 +151,37 @@ class MainActivity : ReactActivity() {
     }
   }
 
-  private fun emitPipActionToJs(action: String) {
+  private fun bringTaskToFront() {
+    val launch = packageManager.getLaunchIntentForPackage(packageName)
+    if (launch != null) {
+      launch.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      startActivity(launch)
+    }
+  }
+
+  private fun openPictureInPictureSettings() {
     try {
-      val reactContext = (application as ReactApplication).reactNativeHost.reactInstanceManager.currentReactContext
-      reactContext
-        ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        ?.emit("McAiPiPAction", action)
+      val packageUri = Uri.parse("package:$packageName")
+      val intents = listOf(
+        Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS").apply {
+          data = packageUri
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = packageUri
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+      )
+
+      val launchIntent = intents.firstOrNull { intent ->
+        intent.resolveActivity(packageManager) != null
+      } ?: return
+
+      startActivity(launchIntent)
     } catch (_: Exception) {}
+  }
+
+  private fun emitPipActionToJs(action: String) {
+    McAiPictureInPictureModule.emitPiPAction(action)
   }
 }

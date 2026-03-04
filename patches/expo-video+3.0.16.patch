@@ -1,0 +1,51 @@
+diff --git a/node_modules/expo-video/android/build.gradle b/node_modules/expo-video/android/build.gradle
+index f17d2d4..ee26fa9 100644
+--- a/node_modules/expo-video/android/build.gradle
++++ b/node_modules/expo-video/android/build.gradle
+@@ -25,6 +25,7 @@ dependencies {
+   implementation "androidx.media3:media3-exoplayer-hls:${androidxMedia3Version}"
+   implementation "androidx.media3:media3-ui:${androidxMedia3Version}"
+   implementation "androidx.media3:media3-datasource-okhttp:${androidxMedia3Version}"
++  implementation "io.github.anilbeesetti:nextlib-media3ext:${androidxMedia3Version}-0.9.0"
+ 
+   def fragment_version = "1.6.2"
+   implementation "androidx.fragment:fragment:$fragment_version"
+diff --git a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
+index 1c7a55c..c4ae3cf 100644
+--- a/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
++++ b/node_modules/expo-video/android/src/main/java/expo/modules/video/player/VideoPlayer.kt
+@@ -52,8 +52,33 @@ import java.lang.ref.WeakReference
+ @UnstableApi
+ class VideoPlayer(val context: Context, appContext: AppContext, source: VideoSource?) : AutoCloseable, SharedObject(appContext), IntervalUpdateEmitter {
+   // This improves the performance of playing DRM-protected content
+-  private var renderersFactory = DefaultRenderersFactory(context)
++  private var renderersFactory = object : io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory(context) {
++    override fun buildAudioRenderers(
++      context: Context,
++      extensionRendererMode: Int,
++      mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
++      enableDecoderFallback: Boolean,
++      audioSink: androidx.media3.exoplayer.audio.AudioSink,
++      eventHandler: android.os.Handler,
++      eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
++      out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
++    ) {
++      super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
++      try {
++        val clazz = Class.forName("io.github.anilbeesetti.nextlib.media3ext.ffdecoder.FfmpegAudioRenderer")
++        val constructor = clazz.getConstructor()
++        val renderer = constructor.newInstance() as androidx.media3.exoplayer.Renderer
++        // Insert the FFmpeg decoder as the top-priority renderer (index 0) 
++        // to completely bypass Android's failure-prone MediaCodec for EAC3 tracks.
++        out.add(0, renderer)
++        android.util.Log.i("ExpoVideo", "Successfully force-injected NextLib FfmpegAudioRenderer at priority 0!")
++      } catch (e: Exception) {
++        android.util.Log.e("ExpoVideo", "Failed to load NextLib FfmpegAudioRenderer", e)
++      }
++    }
++  }
+     .forceEnableMediaCodecAsynchronousQueueing()
++    .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+     .setEnableDecoderFallback(true)
+   private var listeners: MutableList<WeakReference<VideoPlayerListener>> = mutableListOf()
+   private var currentPlayerView = MutableWeakReference<PlayerView?>(null)

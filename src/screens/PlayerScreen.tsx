@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     AppState,
     Alert,
     Animated,
+    BackHandler,
     DeviceEventEmitter,
     Easing,
     Linking,
@@ -21,10 +22,13 @@ import {
 } from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import * as Brightness from 'expo-brightness';
+import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import Slider from '@react-native-community/slider';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as NavigationBar from 'expo-navigation-bar';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
 import AIOverlay from '../components/AIOverlay';
@@ -54,6 +58,7 @@ import { useSettingsStore } from '../store/settingsStore';
 type PlayerScreenRouteProp = RouteProp<RootStackParamList, 'Player'>;
 type PlayerNavigationProp = StackNavigationProp<RootStackParamList>;
 type SubtitleOption = { id: string; label: string; uri?: string; embeddedIndex?: number };
+type PersistedExternalSubtitle = { id: string; label: string; uri: string };
 type PlayerUiStatus = {
     isLoaded: boolean;
     isPlaying: boolean;
@@ -104,25 +109,66 @@ const ZOOM_CYCLE_MODES = QUICK_ZOOM_MODE_IDS.map(
 const AUTO_HIDE_DELAY_MS = 3200;
 const PANEL_TRANSLATE = 16;
 const DOUBLE_TAP_DELAY_MS = 260;
-const RESUME_PROMPT_INACTIVITY_MS = 24 * 60 * 60 * 1000;
 const AUDIO_BOOST_MULTIPLIER = 2;
+const STATUS_UI_POSITION_STEP_MS = 320;
+const STATUS_UI_MAX_STALE_MS = 900;
 const POPUP_WIDTH = 160;
 const POPUP_HEIGHT = 90;
-const USE_SYSTEM_PIP = false;
+const USE_SYSTEM_PIP = pictureInPictureService.isNativeModuleAvailable();
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const subtitleFileNameRegex = /\.(srt|vtt)$/i;
+
+const toPersistedExternalSubtitles = (options: SubtitleOption[]): PersistedExternalSubtitle[] => {
+    const seen = new Set<string>();
+    const persisted: PersistedExternalSubtitle[] = [];
+
+    options.forEach((option) => {
+        if (!option.uri) return;
+        const key = option.uri.trim();
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        persisted.push({
+            id: option.id || key,
+            label: option.label || decodeURIComponent(key.split('/').pop() || 'Subtitle'),
+            uri: key,
+        });
+    });
+
+    return persisted;
+};
+
+const toSafeSubtitleBaseName = (value: string) =>
+    value
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-zA-Z0-9._-]+/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 48) || 'subtitle';
 
 const PlayerScreen = () => {
     const { colors } = useThemeContext();
-    const styles = useStyles(colors);
+    const insets = useSafeAreaInsets();
+    const styles = useMemo(
+        () => usePlayerScreenStyles(colors, insets),
+        [colors, insets.top, insets.bottom, insets.left, insets.right]
+    );
     const route = useRoute<PlayerScreenRouteProp>();
     const navigation = useNavigation<PlayerNavigationProp>();
-    const { videoUri, title, subtitleCandidates = [] } = route.params;
+    const { videoUri, title, subtitleCandidates = [], initialResumePositionMillis = 0 } = route.params;
     const { width, height } = useWindowDimensions();
     const isIncognito = useSettingsStore((state) => state.isIncognito);
     const isLandscape = width > height;
+    const initialResumeSeconds = Math.max(0, initialResumePositionMillis) / 1000;
     const player = useVideoPlayer({ uri: videoUri }, (instance) => {
         instance.loop = false;
-        instance.timeUpdateEventInterval = 0.2;
+        instance.timeUpdateEventInterval = 0.25;
+        // Start immediately to remove perceived pause on open.
+        if (initialResumeSeconds > 0.25) {
+            try {
+                instance.currentTime = initialResumeSeconds;
+            } catch {
+                // Some backends may not allow early seek before loaded; fallback path handles it.
+            }
+        }
         instance.play();
     });
 
@@ -151,6 +197,7 @@ const PlayerScreen = () => {
     const lastBrightnessWriteTs = useRef(0);
     const lastHorizontalSeekTs = useRef(0);
     const lastResumeSaveTs = useRef(0);
+    const lastStatusUiCommitAtRef = useRef(0);
     const touchStartX = useRef(0);
     const touchStartY = useRef(0);
     const verticalGestureActive = useRef(false);
@@ -159,16 +206,19 @@ const PlayerScreen = () => {
     const volumeRef = useRef(1);
     const lastNonZeroVolume = useRef(1);
     const brightnessRef = useRef(1);
-    const controlsOpacity = useRef(new Animated.Value(1)).current;
+    const controlsOpacity = useRef(new Animated.Value(0)).current;
     const playButtonScale = useRef(new Animated.Value(1)).current;
     const seekFeedbackOpacity = useRef(new Animated.Value(0)).current;
     const audioPanelAnim = useRef(new Animated.Value(0)).current;
     const morePanelAnim = useRef(new Animated.Value(0)).current;
     const advancedPanelAnim = useRef(new Animated.Value(0)).current;
     const zoomPanelAnim = useRef(new Animated.Value(0)).current;
-    const popupScaleAnim = useRef(new Animated.Value(0.15)).current;
+    const popupScaleAnim = useRef(new Animated.Value(1)).current;
     const popupOpacityAnim = useRef(new Animated.Value(0)).current;
+    const popupTranslateXAnim = useRef(new Animated.Value(-52)).current;
+    const popupTranslateYAnim = useRef(new Animated.Value(18)).current;
     const popupSizeScale = useRef(new Animated.Value(1)).current;
+    const screenScaleAnim = useRef(new Animated.Value(1)).current;
     const volumePanelAnim = useRef(new Animated.Value(0)).current;
     const lastTapTimestamp = useRef(0);
     const hasAutoStarted = useRef(false);
@@ -196,8 +246,17 @@ const PlayerScreen = () => {
     const hasRestoredSubtitlePreferenceRef = useRef(false);
     const pipEntryPendingRef = useRef(false);
     const pipEnteredRef = useRef(false);
+    const pipExitCloseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const skipNextPiPExitAutoStopRef = useRef(false);
+    const hasEverEnteredPiPRef = useRef(false);
+    const appStateRef = useRef(AppState.currentState);
+    const initialSeekTargetMsRef = useRef(0);
+    const initialSeekRevealTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const floatingToggleInFlightRef = useRef(false);
     const floatingTransitionResetTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const controlsVisibilityTargetRef = useRef(false);
+    const isClosingScreenRef = useRef(false);
+    const hasUserInteractedRef = useRef(false);
 
     const [status, setStatus] = useState<PlayerUiStatus>({
         isLoaded: false,
@@ -206,7 +265,8 @@ const PlayerScreen = () => {
         positionMillis: 0,
         didJustFinish: false,
     });
-    const [showControls, setShowControls] = useState(true);
+    const [showControls, setShowControls] = useState(false);
+    const [isInitialPlaybackReady, setIsInitialPlaybackReady] = useState(true);
     const [volumePanelVisible, setVolumePanelVisible] = useState(false);
     const [audioPanelVisible, setAudioPanelVisible] = useState(false);
     const [morePanelVisible, setMorePanelVisible] = useState(false);
@@ -221,6 +281,7 @@ const PlayerScreen = () => {
     const [audioOnlyMode, setAudioOnlyMode] = useState(false);
     const [popUpMode, setPopUpMode] = useState(false);
     const [popupExpanded, setPopupExpanded] = useState(false);
+    const [isPopUpWindowMounted, setIsPopUpWindowMounted] = useState(false);
     const [floatingTransitionState, setFloatingTransitionState] = useState<FloatingTransitionState>('idle');
     const [pipSupported, setPipSupported] = useState(false);
     const [abRepeatStartMs, setAbRepeatStartMs] = useState<number | null>(null);
@@ -273,23 +334,205 @@ const PlayerScreen = () => {
         { id: '2', title: 'Sample Clip', uri: videoUri },
     ]);
     const [isTouchLocked, setIsTouchLocked] = useState(false);
+    const initialPlaybackReadyRef = useRef(isInitialPlaybackReady);
     const selectedAudioTrackRef = useRef(selectedAudioTrack);
     const isAudioTrackDisabledRef = useRef(isAudioTrackDisabled);
     const selectedSubtitleIdRef = useRef(selectedSubtitleId);
     const selectedSubtitleRef = useRef(selectedSubtitle);
     const subtitleSyncMsRef = useRef(subtitleSyncMs);
+    const localSubtitleOptionsRef = useRef<SubtitleOption[]>([]);
     const playerSettingsRef = useRef(playerSettings);
     const equalizerSettingsRef = useRef(equalizerSettings);
     const speedBeforeHoldRef = useRef<number | null>(null);
+    const insetsRef = useRef(insets);
+    const hasRetriedUnsupportedAudioRef = useRef(false);
+    const hasRetriedRuntimePlaybackRef = useRef(false);
+    const popUpModeRef = useRef(popUpMode);
+    const isIncognitoRef = useRef(isIncognito);
+
+    useEffect(() => {
+        insetsRef.current = insets;
+    }, [insets]);
+
+    useEffect(() => {
+        popUpModeRef.current = popUpMode;
+    }, [popUpMode]);
+
+    useEffect(() => {
+        isIncognitoRef.current = isIncognito;
+    }, [isIncognito]);
+
+    // Hide the status bar while the player is mounted and restore it instantly on unmount.
+    // This prevents the VideoLibrary layout from jumping when the status bar reappears on back navigation.
+    useEffect(() => {
+        StatusBar.setHidden(true, 'none');
+        return () => {
+            StatusBar.setHidden(false, 'none');
+        };
+    }, []);
+
+    useEffect(() => {
+        initialPlaybackReadyRef.current = isInitialPlaybackReady;
+    }, [isInitialPlaybackReady]);
+
+    const clearInitialSeekRevealTimeout = () => {
+        if (initialSeekRevealTimeoutRef.current) {
+            clearTimeout(initialSeekRevealTimeoutRef.current);
+            initialSeekRevealTimeoutRef.current = null;
+        }
+    };
+
+    const markInitialPlaybackReady = () => {
+        clearInitialSeekRevealTimeout();
+        initialSeekTargetMsRef.current = 0;
+        if (!initialPlaybackReadyRef.current) {
+            initialPlaybackReadyRef.current = true;
+            setIsInitialPlaybackReady(true);
+        }
+    };
+
+    const beginInitialPlaybackReveal = () => {
+        clearInitialSeekRevealTimeout();
+        initialSeekTargetMsRef.current = 0;
+        markInitialPlaybackReady();
+    };
+
+    const applyInitialResumeIfNeeded = (durationMillisHint?: number) => {
+        if (hasAppliedResumeRef.current) {
+            return;
+        }
+        hasAppliedResumeRef.current = true;
+
+        const settings = playerSettingsRef.current;
+        const resumePosition = Math.max(0, resumePositionRef.current);
+        if (!settings.automaticResumePlayback || resumePosition <= 3000 || resumePromptShownRef.current) {
+            return;
+        }
+
+        const durationMillis = Math.max(0, Math.floor(durationMillisHint ?? 0));
+        if (durationMillis > 0 && resumePosition >= Math.max(durationMillis - 3000, 0)) {
+            return;
+        }
+
+        const currentMillis = Math.max(0, Math.floor((player.currentTime || 0) * 1000));
+        if (Math.abs(currentMillis - resumePosition) > 1200) {
+            player.currentTime = resumePosition / 1000;
+        }
+        beginInitialPlaybackReveal();
+    };
+
+    useEffect(() => {
+        hasRetriedUnsupportedAudioRef.current = false;
+        hasRetriedRuntimePlaybackRef.current = false;
+        lastStatusUiCommitAtRef.current = 0;
+    }, [videoUri]);
+
+    useEffect(() => {
+        isClosingScreenRef.current = false;
+        screenScaleAnim.setValue(1);
+    }, [videoUri, screenScaleAnim]);
+
+    // Keep Android system bars stable during playback to avoid stutter while controls animate.
+    useEffect(() => {
+        if (Platform.OS !== 'android') return;
+        void NavigationBar.setVisibilityAsync('hidden').catch(() => {
+            // Ignore transient platform-specific navigation bar errors.
+        });
+
+        return () => {
+            void NavigationBar.setVisibilityAsync('visible').catch(() => {
+                // Best effort only.
+            });
+        };
+    }, []);
 
     const subtitleOptions = useMemo(
         () => [{ id: 'off', label: 'Subtitles Off' }, ...embeddedSubtitleOptions, ...localSubtitleOptions],
         [embeddedSubtitleOptions, localSubtitleOptions]
     );
+    const isAnySettingsPanelOpen =
+        audioPanelVisible ||
+        morePanelVisible ||
+        advancedPanelVisible ||
+        zoomPanelVisible ||
+        volumePanelVisible ||
+        equalizerPanelVisible ||
+        controlSettingsVisible ||
+        videoTipsVisible ||
+        jumpToTimeVisible;
+    const topBarTranslateY = controlsOpacity.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-12, 0],
+    });
+    const topBarScale = controlsOpacity.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.985, 1],
+    });
+    const bottomClusterTranslateY = controlsOpacity.interpolate({
+        inputRange: [0, 1],
+        outputRange: [20, 0],
+    });
+    const bottomClusterScale = controlsOpacity.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0.97, 1],
+    });
 
     useEffect(() => {
         activeVideoUriRef.current = videoUri;
     }, [videoUri]);
+
+    // Pause the player when the screen loses focus (e.g. modal closes) to prevent
+    // audio/video bleed during the navigation transition animation.
+    useFocusEffect(
+        useCallback(() => {
+            return () => {
+                if (isClosingScreenRef.current) return;
+                try {
+                    if (player.playing) {
+                        player.pause();
+                    }
+                } catch {
+                    // Best-effort: ignore if player is already released.
+                }
+            };
+        }, [player])
+    );
+
+    useEffect(() => {
+        // Keep native renderer subtitles disabled unless an embedded subtitle is explicitly selected.
+        if (!selectedSubtitleId.startsWith('embedded:')) {
+            try {
+                player.subtitleTrack = null;
+            } catch {
+                // Ignore if backend doesn't expose subtitle selection on this source.
+            }
+            return;
+        }
+
+        // Suppress native subtitle rendering while settings panels are open or while floating/PiP is active.
+        if (isAnySettingsPanelOpen || popUpMode || isPopUpWindowMounted) {
+            try {
+                player.subtitleTrack = null;
+            } catch {
+                // Best-effort only.
+            }
+            return;
+        }
+
+        const embeddedIndex = Number(selectedSubtitleId.split(':')[1]);
+        if (!Number.isInteger(embeddedIndex) || embeddedIndex < 0) {
+            return;
+        }
+        try {
+            const tracks = [...((player as any).availableSubtitleTracks ?? [])];
+            const selectedTrack = tracks[embeddedIndex] ?? null;
+            if (selectedTrack) {
+                player.subtitleTrack = selectedTrack;
+            }
+        } catch {
+            // Best-effort restoration when panel closes.
+        }
+    }, [player, selectedSubtitleId, isAnySettingsPanelOpen, popUpMode, isPopUpWindowMounted]);
 
     useEffect(() => {
         let alive = true;
@@ -318,9 +561,12 @@ const PlayerScreen = () => {
         subtitleTrackId?: string;
         subtitleTrackLabel?: string;
         subtitleSyncMs?: number;
+        externalSubtitles?: PersistedExternalSubtitle[];
     }) => {
+        if (isIncognitoRef.current) return;
         const subtitleEnabled = override?.subtitleEnabled ?? selectedSubtitleId !== 'off';
         const shouldSavePerVideoDelay = playerSettingsRef.current.saveAudioDelayPerVideo;
+        const externalSubtitles = override?.externalSubtitles ?? toPersistedExternalSubtitles(localSubtitleOptionsRef.current);
         void savePlaybackPrefs(videoUri, {
             audioTrackLabel: override?.audioTrackLabel ?? selectedAudioTrack,
             audioDisabled: override?.audioDisabled ?? isAudioTrackDisabled,
@@ -328,6 +574,7 @@ const PlayerScreen = () => {
             subtitleTrackId: subtitleEnabled ? override?.subtitleTrackId ?? selectedSubtitleId : undefined,
             subtitleTrackLabel: subtitleEnabled ? override?.subtitleTrackLabel ?? selectedSubtitle : undefined,
             subtitleSyncMs: shouldSavePerVideoDelay ? override?.subtitleSyncMs ?? subtitleSyncMs : undefined,
+            externalSubtitles,
         });
     };
 
@@ -432,21 +679,28 @@ const PlayerScreen = () => {
     }, [screenBrightness]);
 
     useEffect(() => {
-        const boost = playerSettings.audioBoostEnabled ? AUDIO_BOOST_MULTIPLIER : 1;
-        player.volume = clamp(playerVolume * boost, 0, AUDIO_BOOST_MULTIPLIER);
+        // Native player volume is capped at 1.0. Additional gain is applied via native DSP preamp.
+        player.volume = Math.min(1, clamp(playerVolume, 0, AUDIO_BOOST_MULTIPLIER));
+        const boostRatio = playerSettings.audioBoostEnabled ? Math.max(0, playerVolume - 1) : 0;
+        const basePreampDb = equalizerSettingsRef.current.enabled ? equalizerSettingsRef.current.preampDb : 0;
+        const targetPreampDb = basePreampDb + (boostRatio * 15);
+        void equalizerService.setEnabled(equalizerSettingsRef.current.enabled || boostRatio > 0);
+        void equalizerService.setPreampDb(targetPreampDb);
     }, [player, playerVolume, playerSettings.audioBoostEnabled]);
 
     useEffect(() => {
         if (playerSettings.audioBoostEnabled) {
-            setPlayerVolume(2);
-            volumeRef.current = 2;
-            lastNonZeroVolume.current = 2;
+            const next = setVolumeLevel(2);
+            setPlayerVolume(next);
+            volumeRef.current = next;
+            lastNonZeroVolume.current = next;
             return;
         }
         if (volumeRef.current > 1) {
-            setPlayerVolume(1);
-            volumeRef.current = 1;
-            lastNonZeroVolume.current = 1;
+            const next = setVolumeLevel(1);
+            setPlayerVolume(next);
+            volumeRef.current = next;
+            lastNonZeroVolume.current = next;
         }
     }, [playerSettings.audioBoostEnabled]);
 
@@ -496,6 +750,10 @@ const PlayerScreen = () => {
     }, [subtitleSyncMs]);
 
     useEffect(() => {
+        localSubtitleOptionsRef.current = localSubtitleOptions;
+    }, [localSubtitleOptions]);
+
+    useEffect(() => {
         playerSettingsRef.current = playerSettings;
     }, [playerSettings]);
 
@@ -505,31 +763,54 @@ const PlayerScreen = () => {
 
     useEffect(() => {
         let alive = true;
+        clearInitialSeekRevealTimeout();
+        initialSeekTargetMsRef.current = 0;
+        initialPlaybackReadyRef.current = true;
         hasAutoStarted.current = false;
         hasAppliedResumeRef.current = false;
         resumePromptShownRef.current = false;
-        resumePositionRef.current = 0;
+        hasUserInteractedRef.current = false;
+        resumePositionRef.current = Math.max(0, initialResumePositionMillis);
         resumeUpdatedAtRef.current = 0;
-        resumeInfoLoadedRef.current = false;
+        resumeInfoLoadedRef.current = resumePositionRef.current > 0;
+        controlsVisibilityTargetRef.current = false;
+        controlsOpacity.stopAnimation();
+        controlsOpacity.setValue(0);
+        setShowControls(false);
+        closeAllPanels();
+        if (hideControlsTimeout.current) {
+            clearTimeout(hideControlsTimeout.current);
+            hideControlsTimeout.current = null;
+        }
         hasAppliedDefaultSubtitleRef.current = false;
         hasRestoredSubtitlePreferenceRef.current = false;
         preferredAudioLabelRef.current = null;
         preferredSubtitleIdRef.current = null;
         preferredSubtitleLabelRef.current = null;
         shouldAutoSelectDefaultSubtitleRef.current = true;
+        setIsInitialPlaybackReady(true);
         setIsAudioTrackDisabled(false);
         setSelectedAudioTrack('Default Audio Track');
         setSelectedSubtitleId('off');
         setSelectedSubtitle('Subtitles Off');
+        setEmbeddedSubtitleOptions([]);
+        setDetectedSubtitleTrackCount(0);
+        setLocalSubtitleOptions([]);
+        localSubtitleOptionsRef.current = [];
         setActiveSubtitleCues([]);
         setActiveSubtitleText('');
         setSubtitleSyncMs(playerSettingsRef.current.globalSubtitleDelayMs || 0);
         void (async () => {
             try {
+                if (isIncognitoRef.current) {
+                    return;
+                }
                 const resumeInfo = await loadResumeInfo(videoUri);
                 const prefs = await loadPlaybackPrefs(videoUri);
                 if (!alive) return;
-                resumePositionRef.current = resumeInfo.positionMillis;
+                if (resumePositionRef.current <= 0) {
+                    resumePositionRef.current = resumeInfo.positionMillis;
+                }
                 resumeUpdatedAtRef.current = resumeInfo.updatedAt;
                 if (prefs) {
                     if (prefs.audioTrackLabel) {
@@ -541,6 +822,28 @@ const PlayerScreen = () => {
                     }
                     if (playerSettingsRef.current.saveAudioDelayPerVideo && typeof prefs.subtitleSyncMs === 'number') {
                         setSubtitleSyncMs(prefs.subtitleSyncMs);
+                    }
+                    if (Array.isArray(prefs.externalSubtitles) && prefs.externalSubtitles.length > 0) {
+                        const persistedOptions: SubtitleOption[] = prefs.externalSubtitles
+                            .filter((item) => !!item?.uri)
+                            .map((item) => ({
+                                id: item.id || item.uri,
+                                label: item.label || decodeURIComponent(item.uri.split('/').pop() || 'Subtitle'),
+                                uri: item.uri,
+                            }));
+                        setLocalSubtitleOptions((prev) => {
+                            const next = [...prev];
+                            const seen = new Set(next.map((item) => item.uri || item.id));
+                            persistedOptions.forEach((item) => {
+                                const key = item.uri || item.id;
+                                if (!seen.has(key)) {
+                                    seen.add(key);
+                                    next.push(item);
+                                }
+                            });
+                            localSubtitleOptionsRef.current = next;
+                            return next;
+                        });
                     }
                     if (prefs.subtitleEnabled === false) {
                         setSelectedSubtitleId('off');
@@ -560,6 +863,19 @@ const PlayerScreen = () => {
             } finally {
                 if (alive) {
                     resumeInfoLoadedRef.current = true;
+                    if (!hasAutoStarted.current) {
+                        const isPlayerReady =
+                            player.status !== 'idle' && player.status !== 'loading';
+                        if (isPlayerReady) {
+                            const durationMillis = Math.max(0, Math.floor((player.duration || 0) * 1000));
+                            applyInitialResumeIfNeeded(durationMillis);
+                            hasAutoStarted.current = true;
+                            beginInitialPlaybackReveal();
+                            if (!player.playing) {
+                                player.play();
+                            }
+                        }
+                    }
                 }
             }
         })();
@@ -567,13 +883,30 @@ const PlayerScreen = () => {
         return () => {
             alive = false;
         };
-    }, [videoUri]);
+    }, [videoUri, initialResumePositionMillis]);
 
     useEffect(() => {
-        if (playerSettings.videoTransitionTitleEnabled && title) {
+        if (playerSettings.videoTransitionTitleEnabled && title && hasUserInteractedRef.current) {
             flashSeekFeedback(title);
         }
     }, [videoUri, playerSettings.videoTransitionTitleEnabled, title]);
+
+    const persistImportedSubtitleUri = async (sourceUri: string, fileName?: string, mimeType?: string | null) => {
+        const documentDir = FileSystem.documentDirectory;
+        if (!documentDir || sourceUri.startsWith(documentDir)) {
+            return sourceUri;
+        }
+
+        const extSource = (fileName || sourceUri).toLowerCase();
+        const extension = extSource.endsWith('.vtt') || mimeType === 'text/vtt' ? '.vtt' : '.srt';
+        const subtitleDir = `${documentDir}subtitles/`;
+        const baseName = toSafeSubtitleBaseName(fileName || decodeURIComponent(sourceUri.split('/').pop() || 'subtitle'));
+        const targetUri = `${subtitleDir}${baseName}_${Date.now()}${extension}`;
+
+        await FileSystem.makeDirectoryAsync(subtitleDir, { intermediates: true });
+        await FileSystem.copyAsync({ from: sourceUri, to: targetUri });
+        return targetUri;
+    };
 
     const parseSubtitleContent = (uri: string, content: string) => {
         const lower = uri.toLowerCase();
@@ -597,11 +930,10 @@ const PlayerScreen = () => {
         let alive = true;
         void (async () => {
             const options: SubtitleOption[] = [];
-            const extRegex = /\.(srt|vtt)$/i;
             const seen = new Set<string>();
 
             const addCandidate = (uri: string, name: string) => {
-                if (!extRegex.test(name) || seen.has(uri)) return;
+                if (!subtitleFileNameRegex.test(name) || seen.has(uri)) return;
                 seen.add(uri);
                 options.push({ id: uri, label: name, uri });
             };
@@ -615,7 +947,7 @@ const PlayerScreen = () => {
                     try {
                         const entries = await FileSystem.readDirectoryAsync(dirUri);
                         entries.forEach((name) => {
-                            if (!extRegex.test(name)) return;
+                            if (!subtitleFileNameRegex.test(name)) return;
                             addCandidate(`${dirUri}${name}`, name);
                         });
                     } catch {
@@ -625,13 +957,24 @@ const PlayerScreen = () => {
             }
 
             if (!alive) return;
-            setLocalSubtitleOptions(options);
+            setLocalSubtitleOptions((prev) => {
+                const next = [...prev];
+                const existingUris = new Set(next.map((n) => n.uri));
+                options.forEach((o) => {
+                    if (o.uri && !existingUris.has(o.uri)) {
+                        existingUris.add(o.uri);
+                        next.push(o);
+                    }
+                });
+                return next;
+            });
         })();
 
         return () => {
             alive = false;
         };
-    }, [videoUri, subtitleCandidates]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [videoUri]);
 
     const handleSelectSubtitle = async (option: SubtitleOption) => {
         if (option.id === 'off') {
@@ -656,7 +999,10 @@ const PlayerScreen = () => {
 
         if (typeof option.embeddedIndex === 'number') {
             try {
-                const tracks = (player as any).availableSubtitleTracks ?? [];
+                let tracks: any[] = [];
+                try {
+                    tracks = [...((player as any).availableSubtitleTracks ?? [])];
+                } catch { }
                 player.subtitleTrack = tracks[option.embeddedIndex] ?? null;
                 setSelectedSubtitleId(option.id);
                 setSelectedSubtitle(option.label);
@@ -698,6 +1044,11 @@ const PlayerScreen = () => {
             lastEnabledSubtitleRef.current = option;
             setActiveSubtitleCues(cues);
             setActiveSubtitleText('');
+            if (option.uri && !localSubtitleOptionsRef.current.some((item) => item.uri === option.uri)) {
+                const next = [...localSubtitleOptionsRef.current, { id: option.id, label: option.label, uri: option.uri }];
+                localSubtitleOptionsRef.current = next;
+                setLocalSubtitleOptions(next);
+            }
             hasRestoredSubtitlePreferenceRef.current = true;
             shouldAutoSelectDefaultSubtitleRef.current = false;
             preferredSubtitleIdRef.current = option.id;
@@ -706,6 +1057,7 @@ const PlayerScreen = () => {
                 subtitleEnabled: true,
                 subtitleTrackId: option.id,
                 subtitleTrackLabel: option.label,
+                externalSubtitles: toPersistedExternalSubtitles(localSubtitleOptionsRef.current),
             });
         } catch {
             Alert.alert('Subtitle', 'Could not load selected subtitle file.');
@@ -722,7 +1074,10 @@ const PlayerScreen = () => {
         });
         try {
             player.muted = false;
-            const tracks = (player as any).availableAudioTracks ?? [];
+            let tracks: any[] = [];
+            try {
+                tracks = [...((player as any).availableAudioTracks ?? [])];
+            } catch { }
             player.audioTrack = tracks[index] ?? null;
         } catch {
             Alert.alert(
@@ -744,7 +1099,10 @@ const PlayerScreen = () => {
         if (!option) return;
 
         if (typeof option.embeddedIndex === 'number') {
-            const tracks = (player as any).availableSubtitleTracks ?? [];
+            let tracks: any[] = [];
+            try {
+                tracks = [...((player as any).availableSubtitleTracks ?? [])];
+            } catch { }
             if (!tracks[option.embeddedIndex]) return;
         }
 
@@ -754,47 +1112,112 @@ const PlayerScreen = () => {
         void handleSelectSubtitle(option);
     }, [subtitleOptions, player]);
 
-    const handleDisableAudioTrack = async () => {
+    const handleDisableAudioTrack = async (recoverPlayback = false) => {
         setIsAudioTrackDisabled(true);
         persistPlaybackPreferences({
             audioDisabled: true,
         });
+        let audioTrackDisabled = false;
         try {
-            player.muted = true;
+            player.audioTrack = null;
+            audioTrackDisabled = true;
         } catch {
-            // Fallback handled by internal volume/mute controls.
+            // Not all backends support track-level disabling.
+        }
+        try {
+            player.muted = !audioTrackDisabled;
+        } catch {
+            // Ignore mute fallback failure.
+        }
+
+        if (!recoverPlayback) {
+            return;
+        }
+
+        const resumePositionSeconds = Math.max(0, player.currentTime || 0);
+        const shouldResumePlaying = !!player.playing;
+
+        try {
+            player.replace({ uri: videoUri }, true);
+            setTimeout(() => {
+                try {
+                    if (resumePositionSeconds > 0.25) {
+                        player.currentTime = resumePositionSeconds;
+                    }
+                    if (shouldResumePlaying) {
+                        player.play();
+                    }
+                } catch {
+                    // Best-effort recovery after replace.
+                }
+            }, 280);
+        } catch {
+            try {
+                if (shouldResumePlaying) {
+                    player.play();
+                }
+            } catch {
+                // Ignore secondary recovery failure.
+            }
         }
     };
 
     const handleImportSubtitleFromFolder = async () => {
-        if (Platform.OS !== 'android') {
-            Alert.alert('Subtitle', 'Folder subtitle import is currently available on Android.');
-            return;
-        }
         try {
-            const permission = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
-            if (!permission.granted) {
-                return;
-            }
-            const entries = await FileSystem.StorageAccessFramework.readDirectoryAsync(permission.directoryUri);
-            const subtitleUris = entries.filter((uri) => /\.(srt|vtt)$/i.test(uri));
-            if (subtitleUris.length === 0) {
-                Alert.alert('Subtitle', 'No .srt or .vtt subtitle files found in that folder.');
-                return;
-            }
-            setLocalSubtitleOptions((prev) => {
-                const seen = new Set(prev.map((item) => item.id));
-                const next = [...prev];
-                subtitleUris.forEach((uri) => {
-                    if (seen.has(uri)) return;
-                    const name = decodeURIComponent(uri.split('/').pop() || 'Subtitle');
-                    next.push({ id: uri, uri, label: name });
-                });
-                return next;
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['application/x-subrip', 'text/vtt', '*/*'],
+                copyToCacheDirectory: true,
+                multiple: true,
             });
-            Alert.alert('Subtitle', `Added ${subtitleUris.length} subtitle file(s).`);
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            const subtitleAssets = result.assets.filter((asset) =>
+                subtitleFileNameRegex.test(asset.name || asset.uri) || asset.mimeType === 'application/x-subrip' || asset.mimeType === 'text/vtt'
+            );
+
+            if (subtitleAssets.length === 0) {
+                Alert.alert('Subtitle', 'Please select a valid .srt or .vtt subtitle file.');
+                return;
+            }
+
+            const next = [...localSubtitleOptionsRef.current];
+            const seen = new Set(next.map((item) => item.uri || item.id));
+            let addedCount = 0;
+            for (const asset of subtitleAssets) {
+                const originalUri = asset.uri;
+                let persistedUri = originalUri;
+                try {
+                    persistedUri = await persistImportedSubtitleUri(originalUri, asset.name, asset.mimeType);
+                } catch {
+                    // If copy fails, keep original uri as best effort.
+                }
+
+                if (seen.has(persistedUri) || seen.has(originalUri)) {
+                    continue;
+                }
+                const name = asset.name || decodeURIComponent(persistedUri.split('/').pop() || 'Subtitle');
+                next.push({ id: persistedUri, uri: persistedUri, label: name });
+                seen.add(persistedUri);
+                seen.add(originalUri);
+                addedCount += 1;
+            }
+
+            if (addedCount === 0) {
+                Alert.alert('Subtitle', 'Selected subtitles are already added.');
+                return;
+            }
+
+            localSubtitleOptionsRef.current = next;
+            setLocalSubtitleOptions(next);
+            persistPlaybackPreferences({
+                externalSubtitles: toPersistedExternalSubtitles(next),
+            });
+            Alert.alert('Subtitle', `Added ${addedCount} subtitle file(s).`);
         } catch {
-            Alert.alert('Subtitle', 'Could not import subtitle files from folder.');
+            Alert.alert('Subtitle', 'Could not pick subtitle file.');
         }
     };
 
@@ -825,7 +1248,54 @@ const PlayerScreen = () => {
     };
 
     const handleVideoError = (error: string) => {
-        Alert.alert('Playback Error', error || 'Unknown video playback error.');
+        const errorText = error || 'Unknown video playback error.';
+        const isUnsupportedAudioCodecError =
+            errorText.includes('MediaCodecAudioRenderer') &&
+            (errorText.includes('Decoder init failed') || errorText.includes('NO_UNSUPPORTED_TYPE'));
+
+        if (isUnsupportedAudioCodecError) {
+            if (!hasRetriedUnsupportedAudioRef.current) {
+                hasRetriedUnsupportedAudioRef.current = true;
+                void handleDisableAudioTrack(true);
+            }
+
+            Alert.alert(
+                'Unsupported Audio Format',
+                'This build cannot decode this video audio track on the current device backend (for example EAC3/Dolby). The app retried playback with audio disabled.'
+            );
+            return;
+        }
+
+        if (
+            errorText.includes('AudioSink') &&
+            (errorText.includes('UNSUPPORTED') || errorText.includes('decoder'))
+        ) {
+            void handleDisableAudioTrack(false);
+            Alert.alert('Unsupported Audio Format', 'The current audio output path is not supported for this stream.');
+            return;
+        }
+        const lowerError = errorText.toLowerCase();
+        const isUnexpectedRuntimePlaybackError =
+            lowerError.includes('playback exception') ||
+            lowerError.includes('unexpected runtime error');
+        if (isUnexpectedRuntimePlaybackError && !hasRetriedRuntimePlaybackRef.current) {
+            hasRetriedRuntimePlaybackRef.current = true;
+            const retryAtSeconds = Math.max(0, statusRef.current.positionMillis / 1000);
+            void player
+                .replaceAsync({ uri: videoUri })
+                .then(() => {
+                    if (retryAtSeconds > 0.25) {
+                        player.currentTime = retryAtSeconds;
+                    }
+                    player.play();
+                    showSeekFeedback('Recovering playback...', 850);
+                })
+                .catch(() => {
+                    Alert.alert('Playback Error', errorText);
+                });
+            return;
+        }
+        Alert.alert('Playback Error', errorText);
     };
 
     const hideGestureHudSoon = () => {
@@ -857,14 +1327,12 @@ const PlayerScreen = () => {
                 // Native volume maxes out at 1.0
                 player.volume = Math.min(1, next);
 
-                // If above 1.0, use Preamp gain (up to 15dB)
-                if (next > 1) {
-                    const boostRatio = next - 1; // 0.0 to 1.0
-                    void equalizerService.setEnabled(true);
-                    void equalizerService.setPreampDb(boostRatio * 15);
-                } else if (volumeRef.current > 1) {
-                    void equalizerService.setPreampDb(0);
-                }
+                // Above 1.0, add native DSP preamp gain while preserving equalizer preamp if enabled.
+                const boostRatio = playerSettingsRef.current.audioBoostEnabled ? Math.max(0, next - 1) : 0;
+                const basePreampDb = equalizerSettingsRef.current.enabled ? equalizerSettingsRef.current.preampDb : 0;
+                const targetPreampDb = basePreampDb + (boostRatio * 15);
+                void equalizerService.setEnabled(equalizerSettingsRef.current.enabled || boostRatio > 0);
+                void equalizerService.setPreampDb(targetPreampDb);
             }
         }
         volumeRef.current = next;
@@ -882,6 +1350,7 @@ const PlayerScreen = () => {
 
     const handleTouchStart = (event: any) => {
         if (popUpMode) return;
+        hasUserInteractedRef.current = true;
         if (isTouchLocked) return;
         if (isAnyPanelOpen()) {
             verticalGestureActive.current = false;
@@ -1077,31 +1546,47 @@ const PlayerScreen = () => {
     };
 
     const animatePanel = (value: Animated.Value, visible: boolean) => {
+        value.stopAnimation();
         Animated.timing(value, {
             toValue: visible ? 1 : 0,
-            duration: visible ? 180 : 140,
+            duration: visible ? 140 : 110,
             easing: visible ? Easing.out(Easing.cubic) : Easing.in(Easing.quad),
             useNativeDriver: true,
+            isInteraction: false,
         }).start();
     };
 
-    const showOverlayControls = () => {
+    const showOverlayControls = (force = false) => {
+        if (!force && !hasUserInteractedRef.current) {
+            return;
+        }
+        controlsVisibilityTargetRef.current = true;
+        controlsOpacity.stopAnimation();
         setShowControls(true);
         Animated.timing(controlsOpacity, {
             toValue: 1,
-            duration: 200,
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
             useNativeDriver: true,
+            isInteraction: false,
         }).start();
     };
 
     const hideOverlayControls = () => {
+        controlsVisibilityTargetRef.current = false;
+        controlsOpacity.stopAnimation();
         closeAllPanels();
-        setShowControls(false);
         Animated.timing(controlsOpacity, {
             toValue: 0,
-            duration: 220,
+            duration: 190,
+            easing: Easing.in(Easing.cubic),
             useNativeDriver: true,
-        }).start();
+            isInteraction: false,
+        }).start(({ finished }) => {
+            if (finished && !controlsVisibilityTargetRef.current) {
+                setShowControls(false);
+            }
+        });
     };
 
     const resetControlsTimer = () => {
@@ -1170,6 +1655,7 @@ const PlayerScreen = () => {
 
         void (async () => {
             try {
+                await Brightness.useSystemBrightnessAsync();
                 const current = await Brightness.getBrightnessAsync();
                 initialBrightness.current = current;
                 setScreenBrightness(current);
@@ -1301,6 +1787,11 @@ const PlayerScreen = () => {
             if (pipEntryTimeout.current) {
                 clearTimeout(pipEntryTimeout.current);
             }
+            clearInitialSeekRevealTimeout();
+            if (pipExitCloseTimeoutRef.current) {
+                clearTimeout(pipExitCloseTimeoutRef.current);
+                pipExitCloseTimeoutRef.current = null;
+            }
             if (floatingTransitionResetTimeoutRef.current) {
                 clearTimeout(floatingTransitionResetTimeoutRef.current);
                 floatingTransitionResetTimeoutRef.current = null;
@@ -1317,23 +1808,26 @@ const PlayerScreen = () => {
             ScreenOrientation.removeOrientationChangeListener(subscription);
             void ScreenOrientation.unlockAsync();
             if (hasBrightnessControl.current && initialBrightness.current !== null) {
-                void Brightness.setBrightnessAsync(initialBrightness.current);
+                void Brightness.useSystemBrightnessAsync();
             }
-            if (statusRef.current.isLoaded && !statusRef.current.didJustFinish) {
+            if (!isIncognitoRef.current && statusRef.current.isLoaded && !statusRef.current.didJustFinish) {
                 void writeResumePosition(activeVideoUriRef.current, statusRef.current.positionMillis);
             }
             void pictureInPictureService.setAutoEnterEnabled(false);
             void equalizerService.release();
-            const subtitleEnabled = selectedSubtitleIdRef.current !== 'off';
             const shouldSavePerVideoDelay = playerSettingsRef.current.saveAudioDelayPerVideo;
-            void savePlaybackPrefs(activeVideoUriRef.current, {
-                audioTrackLabel: selectedAudioTrackRef.current,
-                audioDisabled: isAudioTrackDisabledRef.current,
-                subtitleEnabled,
-                subtitleTrackId: subtitleEnabled ? selectedSubtitleIdRef.current : undefined,
-                subtitleTrackLabel: subtitleEnabled ? selectedSubtitleRef.current : undefined,
-                subtitleSyncMs: shouldSavePerVideoDelay ? subtitleSyncMsRef.current : undefined,
-            });
+            if (!isIncognitoRef.current) {
+                const subtitleEnabled = selectedSubtitleIdRef.current !== 'off';
+                void savePlaybackPrefs(activeVideoUriRef.current, {
+                    audioTrackLabel: selectedAudioTrackRef.current,
+                    audioDisabled: isAudioTrackDisabledRef.current,
+                    subtitleEnabled,
+                    subtitleTrackId: subtitleEnabled ? selectedSubtitleIdRef.current : undefined,
+                    subtitleTrackLabel: subtitleEnabled ? selectedSubtitleRef.current : undefined,
+                    subtitleSyncMs: shouldSavePerVideoDelay ? subtitleSyncMsRef.current : undefined,
+                    externalSubtitles: toPersistedExternalSubtitles(localSubtitleOptionsRef.current),
+                });
+            }
             if (!shouldSavePerVideoDelay) {
                 void savePlayerControlSettings({
                     ...playerSettingsRef.current,
@@ -1345,41 +1839,54 @@ const PlayerScreen = () => {
 
     const handleAnalyzeScene = async () => {
         if (!status.isLoaded || isAiAnalyzing || isAdPlaying) return;
+        const wasPlayingBeforeAnalyze = status.isPlaying;
 
-        // 1. Pause video
-        if (status.isPlaying) {
+        // 1. Pause video immediately
+        if (wasPlayingBeforeAnalyze) {
             player.pause();
         }
 
-        // 2. Capture the current timestamp immediately
+        // 2. Capture the current timestamp
         const currentMillis = status.positionMillis || 0;
 
-        // 3. Start AI analysis and the Ad IN PARALLEL.
-        //    Gemini (~2s) races against the ad (~5-30s).
-        //    By the time the ad ends, the result is usually already waiting.
-        setIsAdPlaying(true);
+        // 3. Pre-capture the video frame BEFORE the ad starts.
+        const preCapturedBase64 = await aiService.captureFrameBase64(videoUri, currentMillis);
 
-        let analysisResolved = false;
-        const analysisPromise = aiService.analyze(currentMillis, title, videoUri).then(r => {
-            analysisResolved = true;
-            return r;
-        });
-        const adPromise = adMobService.showRewardedAd();
+        setIsAdPlaying(true);
+        setIsAiAnalyzing(true); // Flag UI so if they check, it's already analyzing
+
+        // 4. Fire the Gemini API call IMMEDIATELY, but don't await it yet.
+        // It runs concurrently in the background while the user watches the ad.
+        let analysisPromise: Promise<Awaited<ReturnType<typeof aiService.analyze>>>;
+        if (preCapturedBase64) {
+            // Use the pre-captured frame — skips thumbnail extraction completely.
+            analysisPromise = aiService.analyzeWithBase64(preCapturedBase64, currentMillis, title);
+        } else {
+            // Fallback: service re-captures the frame (adds latency but is safe).
+            analysisPromise = aiService.analyze(currentMillis, title, videoUri);
+        }
 
         try {
-            const earnedReward = await adPromise;
+            // 5. Show the ad. Await its completion.
+            const earnedReward = await adMobService.showRewardedAd();
             setIsAdPlaying(false);
 
             if (!earnedReward) {
-                // User skipped the ad — discard the result and resume.
-                player.play();
+                // User skipped the ad. Discard the API call.
+                setIsAiAnalyzing(false);
+                flashSeekFeedback('Watch full ad to unlock AI');
+                Alert.alert(
+                    'Ad Required',
+                    'Please watch the full rewarded ad to get AI analysis.'
+                );
+                if (wasPlayingBeforeAnalyze) {
+                    player.play();
+                }
                 return;
             }
 
-            // 4. Only show the loading spinner if Gemini isn't done yet.
-            if (!analysisResolved) {
-                setIsAiAnalyzing(true);
-            }
+            // 6. User finished the ad. Because the API was running in the background for
+            // 5-15 seconds, this await resolves almost instantly — effectively zero delay!
             const result = await analysisPromise;
             setIsAiAnalyzing(false);
             setDetections(result.detections);
@@ -1388,8 +1895,17 @@ const PlayerScreen = () => {
             console.warn('AI Analysis or Ad failed:', error);
             setIsAdPlaying(false);
             setIsAiAnalyzing(false);
+            if (wasPlayingBeforeAnalyze) {
+                player.play();
+            }
+            Alert.alert(
+                'AI Analysis Failed',
+                error?.message || 'Something went wrong during the analysis. Please try again later.'
+            );
         }
     };
+
+
 
     const handleCloseAI = () => {
         setDetections([]);
@@ -1398,8 +1914,10 @@ const PlayerScreen = () => {
 
     useEffect(() => {
         const syncTracks = () => {
-            const audioTracks = (player as any).availableAudioTracks ?? [];
-            const subtitles = (player as any).availableSubtitleTracks ?? [];
+            let audioTracks: any[] = [];
+            try { audioTracks = [...((player as any).availableAudioTracks ?? [])]; } catch { }
+            let subtitles: any[] = [];
+            try { subtitles = [...((player as any).availableSubtitleTracks ?? [])]; } catch { }
             const discoveredAudio = audioTracks.map(
                 (track: any, index: number) => track?.label || track?.language || `Audio Track ${index + 1}`
             );
@@ -1410,7 +1928,7 @@ const PlayerScreen = () => {
                     const preferredIndex = discoveredAudio.findIndex(
                         (label: string) => label === preferredAudioLabelRef.current
                     );
-                    if (!isAudioTrackDisabled) {
+                    if (!isAudioTrackDisabledRef.current) {
                         try {
                             player.audioTrack = audioTracks[preferredIndex] ?? null;
                         } catch {
@@ -1419,7 +1937,7 @@ const PlayerScreen = () => {
                     }
                     setSelectedAudioTrack(preferredAudioLabelRef.current);
                     preferredAudioLabelRef.current = null;
-                } else if (!discoveredAudio.includes(selectedAudioTrack)) {
+                } else if (!discoveredAudio.includes(selectedAudioTrackRef.current)) {
                     setSelectedAudioTrack(discoveredAudio[0]);
                 }
             } else {
@@ -1484,72 +2002,68 @@ const PlayerScreen = () => {
         const syncStatus = (didJustFinish = false) => {
             const durationMillis = Math.max(0, Math.floor((player.duration || 0) * 1000));
             const positionMillis = Math.max(0, Math.floor((player.currentTime || 0) * 1000));
+            const prevStatus = statusRef.current;
             const nextStatus: PlayerUiStatus = {
                 isLoaded: player.status !== 'idle' && player.status !== 'loading',
-                isPlaying: !!player.playing,
+                isPlaying: sliderSeekingRef.current ? prevStatus.isPlaying : !!player.playing,
                 durationMillis,
                 positionMillis,
                 didJustFinish,
             };
-            setStatus(nextStatus);
+            const now = Date.now();
+            const hasCriticalChange =
+                prevStatus.isLoaded !== nextStatus.isLoaded ||
+                prevStatus.isPlaying !== nextStatus.isPlaying ||
+                prevStatus.didJustFinish !== nextStatus.didJustFinish ||
+                prevStatus.durationMillis !== nextStatus.durationMillis;
+            const hasMeaningfulProgressAdvance =
+                Math.abs(nextStatus.positionMillis - prevStatus.positionMillis) >= STATUS_UI_POSITION_STEP_MS;
+            const isUiStatusStale =
+                now - lastStatusUiCommitAtRef.current >= STATUS_UI_MAX_STALE_MS;
+
+            if (hasCriticalChange || hasMeaningfulProgressAdvance || isUiStatusStale || didJustFinish) {
+                lastStatusUiCommitAtRef.current = now;
+                setStatus((prev) => {
+                    if (
+                        prev.isLoaded === nextStatus.isLoaded &&
+                        prev.isPlaying === nextStatus.isPlaying &&
+                        prev.durationMillis === nextStatus.durationMillis &&
+                        prev.positionMillis === nextStatus.positionMillis &&
+                        prev.didJustFinish === nextStatus.didJustFinish
+                    ) {
+                        return prev;
+                    }
+                    return nextStatus;
+                });
+            }
             statusRef.current = nextStatus;
 
-            if (nextStatus.isLoaded && resumeInfoLoadedRef.current && !hasAppliedResumeRef.current) {
-                hasAppliedResumeRef.current = true;
-                const resumePosition = resumePositionRef.current;
-                const settings = playerSettingsRef.current;
-                const canResume =
-                    settings.automaticResumePlayback &&
-                    resumePosition > 3000 &&
-                    durationMillis > 0 &&
-                    resumePosition < Math.max(durationMillis - 3000, 0);
-                const shouldPromptResume =
-                    settings.resumeMode === 'prompt_after_24h' &&
-                    resumeUpdatedAtRef.current > 0 &&
-                    Date.now() - resumeUpdatedAtRef.current >= RESUME_PROMPT_INACTIVITY_MS;
-                if (canResume && !resumePromptShownRef.current) {
-                    if (settings.resumeMode === 'always') {
-                        player.currentTime = resumePosition / 1000;
-                    } else if (shouldPromptResume) {
-                        resumePromptShownRef.current = true;
-                        hasAutoStarted.current = true;
-                        Alert.alert(
-                            'Resume Playback',
-                            `Continue from ${formatTime(resumePosition)}?`,
-                            [
-                                {
-                                    text: 'Start Over',
-                                    style: 'destructive',
-                                    onPress: () => {
-                                        if (!isIncognito) void writeResumePosition(videoUri, 0);
-                                        player.currentTime = 0;
-                                        player.play();
-                                    },
-                                },
-                                {
-                                    text: 'Resume',
-                                    onPress: () => {
-                                        player.currentTime = resumePosition / 1000;
-                                        player.play();
-                                    },
-                                },
-                            ],
-                            { cancelable: false }
-                        );
-                    } else {
-                        player.currentTime = resumePosition / 1000;
-                    }
+            if (!initialPlaybackReadyRef.current && nextStatus.isLoaded) {
+                const pendingInitialSeekTargetMs = initialSeekTargetMsRef.current;
+                if (
+                    pendingInitialSeekTargetMs <= 0 ||
+                    nextStatus.positionMillis >= Math.max(0, pendingInitialSeekTargetMs - 1200)
+                ) {
+                    markInitialPlaybackReady();
                 }
             }
 
+            if (nextStatus.isLoaded) {
+                applyInitialResumeIfNeeded(durationMillis);
+            }
+
+            // Autostart as soon as player is loaded for immediate responsiveness.
             if (nextStatus.isLoaded && !hasAutoStarted.current) {
                 hasAutoStarted.current = true;
-                player.play();
+                beginInitialPlaybackReveal();
+                if (!player.playing) {
+                    player.play();
+                }
             }
 
             if (didJustFinish) {
-                showOverlayControls();
-                if (!isIncognito) void writeResumePosition(videoUri, 0);
+                showOverlayControls(true);
+                if (!isIncognitoRef.current) void writeResumePosition(videoUri, 0);
                 if (repeatMode === 'single') {
                     player.currentTime = 0;
                     player.play();
@@ -1572,7 +2086,7 @@ const PlayerScreen = () => {
                 const now = Date.now();
                 if (now - lastResumeSaveTs.current > 3000) {
                     lastResumeSaveTs.current = now;
-                    if (!isIncognito) void writeResumePosition(videoUri, positionMillis);
+                    if (!isIncognitoRef.current) void writeResumePosition(videoUri, positionMillis);
                 }
             }
         };
@@ -1618,6 +2132,7 @@ const PlayerScreen = () => {
             blockNextTap.current = false;
             return;
         }
+        hasUserInteractedRef.current = true;
         if (isTouchLocked) {
             showOverlayControls();
             resetControlsTimer();
@@ -1680,6 +2195,7 @@ const PlayerScreen = () => {
         if (status.isPlaying) {
             player.pause();
         } else {
+            markInitialPlaybackReady();
             player.play();
         }
         showOverlayControls();
@@ -1776,9 +2292,11 @@ const PlayerScreen = () => {
         if (!equalizerSupported) return;
         try {
             const sessionId = getPlayerAudioSessionId();
+            const boostRatio = playerSettingsRef.current.audioBoostEnabled ? Math.max(0, volumeRef.current - 1) : 0;
+            const effectivePreampDb = next.preampDb + (boostRatio * 15);
             await equalizerService.attachToPlayerSession(sessionId);
-            await equalizerService.setEnabled(next.enabled);
-            await equalizerService.setPreampDb(next.preampDb);
+            await equalizerService.setEnabled(next.enabled || boostRatio > 0);
+            await equalizerService.setPreampDb(effectivePreampDb);
             for (let i = 0; i < EQUALIZER_FREQUENCIES.length; i += 1) {
                 await equalizerService.setBandGainDb(i, next.bandsDb[i] ?? 0);
             }
@@ -1935,13 +2453,32 @@ const PlayerScreen = () => {
         }
     };
 
+    const openPiPSettings = async () => {
+        try {
+            await pictureInPictureService.openSettings();
+            return;
+        } catch {
+            try {
+                await Linking.openSettings();
+                return;
+            } catch {
+                Alert.alert('Picture-in-Picture', 'Unable to open PiP permission settings.');
+            }
+        }
+    };
+
     const showOverlayBlockedPrompt = (message: string) => {
         Alert.alert('Enable Floating Window', message, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Open Settings', onPress: () => void openOverlaySettings() },
         ]);
     };
-    const showPiPBlockedPrompt = showOverlayBlockedPrompt;
+    const showPiPBlockedPrompt = (message: string) => {
+        Alert.alert('Enable Picture-in-Picture', message, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => void openPiPSettings() },
+        ]);
+    };
 
     const clearFloatingTransitionReset = () => {
         if (floatingTransitionResetTimeoutRef.current) {
@@ -1973,6 +2510,102 @@ const PlayerScreen = () => {
         }
     };
 
+    const clearPiPCloseTimeout = () => {
+        if (pipExitCloseTimeoutRef.current) {
+            clearTimeout(pipExitCloseTimeoutRef.current);
+            pipExitCloseTimeoutRef.current = null;
+        }
+    };
+
+    const stopPlaybackCompletely = () => {
+        try {
+            player.pause();
+        } catch {
+            // Best-effort hard stop.
+        }
+        statusRef.current = {
+            ...statusRef.current,
+            isPlaying: false,
+        };
+        setStatus((prev) => ({
+            ...prev,
+            isPlaying: false,
+        }));
+    };
+
+    const resolvePlaybackPositionMillis = (fallbackPositionMs?: number) => {
+        if (typeof fallbackPositionMs === 'number' && Number.isFinite(fallbackPositionMs)) {
+            return Math.max(0, Math.floor(fallbackPositionMs));
+        }
+        const currentSeconds =
+            typeof player.currentTime === 'number' && Number.isFinite(player.currentTime)
+                ? player.currentTime
+                : statusRef.current.positionMillis / 1000;
+        return Math.max(0, Math.floor(currentSeconds * 1000));
+    };
+
+    const persistResumeCheckpoint = async (fallbackPositionMs?: number) => {
+        if (isIncognitoRef.current) return;
+        const positionMs = resolvePlaybackPositionMillis(fallbackPositionMs);
+        const activeUri = activeVideoUriRef.current || videoUri;
+        await writeResumePosition(activeUri, positionMs);
+        resumePositionRef.current = positionMs;
+        resumeUpdatedAtRef.current = Date.now();
+        resumeInfoLoadedRef.current = true;
+    };
+
+    const stopAndPersistResume = (fallbackPositionMs?: number) => {
+        stopPlaybackCompletely();
+        void persistResumeCheckpoint(fallbackPositionMs)
+            .catch(() => {
+                // Best effort only.
+            });
+    };
+
+    const handleClosePlayer = useCallback(() => {
+        if (isClosingScreenRef.current) return;
+        isClosingScreenRef.current = true;
+        const fallbackPositionMs = resolvePlaybackPositionMillis(statusRef.current.positionMillis);
+        clearPiPCloseTimeout();
+        clearInitialSeekRevealTimeout();
+        initialSeekTargetMsRef.current = 0;
+        if (popUpModeRef.current) {
+            clearPiPEntryWatchdog();
+            setPopUpMode(false);
+            updateFloatingTransitionState('idle');
+            if (USE_SYSTEM_PIP) {
+                skipNextPiPExitAutoStopRef.current = true;
+                void pictureInPictureService.setAutoEnterEnabled(false).catch(() => { });
+            } else {
+                void floatingOverlayService.stopOverlay().catch(() => { });
+            }
+            stopAndPersistResume(fallbackPositionMs);
+        } else {
+            void persistResumeCheckpoint(fallbackPositionMs);
+        }
+        if (navigation.canGoBack()) {
+            navigation.goBack();
+        } else {
+            navigation.replace('Main');
+        }
+    }, [navigation]);
+
+    const seekByFromPiPAction = (deltaMs: number) => {
+        if (!statusRef.current.isLoaded) return;
+        const currentSeconds =
+            typeof player.currentTime === 'number' && Number.isFinite(player.currentTime)
+                ? player.currentTime
+                : statusRef.current.positionMillis / 1000;
+        const currentMs = Math.max(0, Math.round(currentSeconds * 1000));
+        const durationMs = Math.max(0, statusRef.current.durationMillis || 0);
+        const nextMs =
+            durationMs > 0
+                ? clamp(currentMs + deltaMs, 0, durationMs)
+                : Math.max(0, currentMs + deltaMs);
+        player.currentTime = nextMs / 1000;
+        statusRef.current.positionMillis = nextMs;
+    };
+
     const togglePopUpMode = async () => {
         if (floatingToggleInFlightRef.current) return;
         floatingToggleInFlightRef.current = true;
@@ -1988,7 +2621,7 @@ const PlayerScreen = () => {
                     const supported = await floatingOverlayService.isSupported();
                     if (!supported) {
                         updateFloatingTransitionState('error', 1400);
-                        Alert.alert('Floating Player', 'Floating player is supported on Android only.');
+                        Alert.alert('Floating Player', 'Floating player is unavailable on this device/build. Use Android 8+ and ensure the app is rebuilt after native changes.');
                         showOverlayControls();
                         resetControlsTimer();
                         return;
@@ -2065,6 +2698,9 @@ const PlayerScreen = () => {
                     await new Promise((resolve) => setTimeout(resolve, 180));
                 }
                 await pictureInPictureService.enter(16, 9, statusRef.current.isPlaying);
+                setPopUpMode(true);
+                updateFloatingTransitionState('active', 1300);
+                hideOverlayControls();
                 await pictureInPictureService.setAutoEnterEnabled(true);
                 pipEntryTimeout.current = setTimeout(() => {
                     if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
@@ -2074,7 +2710,11 @@ const PlayerScreen = () => {
                     updateFloatingTransitionState('error', 1400);
                     void pictureInPictureService.bringAppToFront().catch(() => { });
                     void pictureInPictureService.isSupported().then(setPipSupported).catch(() => { });
-                    showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                    if (hasEverEnteredPiPRef.current) {
+                        flashSeekFeedback('PiP unavailable right now');
+                    } else {
+                        showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                    }
                     showOverlayControls();
                     resetControlsTimer();
                 }, 1800);
@@ -2082,6 +2722,9 @@ const PlayerScreen = () => {
                 try {
                     await new Promise((resolve) => setTimeout(resolve, 180));
                     await pictureInPictureService.enter(16, 9, true);
+                    setPopUpMode(true);
+                    updateFloatingTransitionState('active', 1300);
+                    hideOverlayControls();
                     await pictureInPictureService.setAutoEnterEnabled(true);
                     pipEntryTimeout.current = setTimeout(() => {
                         if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
@@ -2090,7 +2733,11 @@ const PlayerScreen = () => {
                         setPopUpMode(false);
                         updateFloatingTransitionState('error', 1400);
                         void pictureInPictureService.bringAppToFront().catch(() => { });
-                        showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                        if (hasEverEnteredPiPRef.current) {
+                            flashSeekFeedback('PiP unavailable right now');
+                        } else {
+                            showPiPBlockedPrompt('PiP could not be started on this device right now.');
+                        }
                         showOverlayControls();
                         resetControlsTimer();
                     }, 1800);
@@ -2105,12 +2752,16 @@ const PlayerScreen = () => {
                     }
                     // Some OEM ROMs may push app to background on failed PiP attempt.
                     await pictureInPictureService.bringAppToFront().catch(() => { });
-                    const permissionEnabled = await pictureInPictureService.isPermissionEnabled();
-                    showPiPBlockedPrompt(
-                        permissionEnabled
-                            ? 'PiP could not be started right now on this device. Please disable battery restrictions and try again.'
-                            : 'PiP could not be started. Please allow Picture-in-Picture for this app.'
-                    );
+                    if (hasEverEnteredPiPRef.current) {
+                        flashSeekFeedback('PiP unavailable right now');
+                    } else {
+                        const permissionEnabled = await pictureInPictureService.isPermissionEnabled();
+                        showPiPBlockedPrompt(
+                            permissionEnabled
+                                ? 'PiP could not be started right now on this device. Please disable battery restrictions and try again.'
+                                : 'PiP could not be started. Please allow Picture-in-Picture for this app.'
+                        );
+                    }
                     showOverlayControls();
                     resetControlsTimer();
                 }
@@ -2166,6 +2817,10 @@ const PlayerScreen = () => {
     };
 
     const saveCurrentPlaylist = async () => {
+        if (isIncognitoRef.current) {
+            Alert.alert('Incognito Mode', 'Playlist snapshots are disabled while Incognito Mode is enabled.');
+            return;
+        }
         const playlistName = `${title || 'Playlist'} - ${new Date().toLocaleString()}`;
         await savePlaylistSnapshot(playlistName, playlistItems);
         setShowPlaylist(true);
@@ -2222,7 +2877,7 @@ const PlayerScreen = () => {
         setBookmarks((prev) => {
             if (prev.includes(sec)) return prev;
             const newBookmarks = [...prev, sec].sort((a, b) => a - b);
-            if (!isIncognito) void saveBookmarks(videoUri, newBookmarks);
+            if (!isIncognitoRef.current) void saveBookmarks(videoUri, newBookmarks);
             return newBookmarks;
         });
         flashSeekFeedback(`Bookmark added at ${formatTime(sec * 1000)}`);
@@ -2287,18 +2942,36 @@ const PlayerScreen = () => {
         }
     }, [isOrientationLocked]);
 
+    useFocusEffect(
+        useCallback(() => {
+            const onHardwareBack = () => {
+                handleClosePlayer();
+                return true;
+            };
+            const subscription = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+            return () => {
+                subscription.remove();
+            };
+        }, [handleClosePlayer])
+    );
+
     useEffect(() => {
         if (!USE_SYSTEM_PIP) return;
         const sub = AppState.addEventListener('change', (state) => {
+            appStateRef.current = state;
+            if (state === 'active') {
+                clearPiPCloseTimeout();
+            }
             if (state !== 'background') return;
-            if (!popUpMode || !pipSupported) return;
+            // Only retry on explicit PiP entry attempt; avoid unsolicited re-entry loops.
+            if (!pipEntryPendingRef.current) return;
             if (!statusRef.current.isLoaded) return;
             void pictureInPictureService.enter(16, 9, statusRef.current.isPlaying).catch(() => { });
         });
         return () => {
             sub.remove();
         };
-    }, [popUpMode, pipSupported]);
+    }, []);
 
     useEffect(() => {
         if (!USE_SYSTEM_PIP) return;
@@ -2310,29 +2983,63 @@ const PlayerScreen = () => {
         if (!USE_SYSTEM_PIP) return;
         const sub = DeviceEventEmitter.addListener('McAiPiPAction', (action: string) => {
             switch (action) {
+                case 'app.mcai.videoplayer.pip.BACKWARD':
+                    seekByFromPiPAction(-10_000);
+                    return;
                 case 'app.mcai.videoplayer.pip.PLAY_PAUSE':
                     if (!statusRef.current.isLoaded) return;
-                    if (statusRef.current.isPlaying) {
-                        player.pause();
-                    } else {
+                    const currentlyPlaying =
+                        typeof player.playing === 'boolean'
+                            ? player.playing
+                            : statusRef.current.isPlaying;
+                    const nextShouldPlay = !currentlyPlaying;
+                    if (nextShouldPlay) {
                         player.play();
+                    } else {
+                        player.pause();
                     }
+                    statusRef.current = {
+                        ...statusRef.current,
+                        isPlaying: nextShouldPlay,
+                    };
+                    setStatus((prev) => ({
+                        ...prev,
+                        isPlaying: nextShouldPlay,
+                    }));
+                    void pictureInPictureService.updateActions(nextShouldPlay).catch(() => { });
+                    return;
+                case 'app.mcai.videoplayer.pip.FORWARD':
+                    seekByFromPiPAction(10_000);
                     return;
                 case 'app.mcai.videoplayer.pip.EXPAND':
+                    clearPiPEntryWatchdog();
+                    clearPiPCloseTimeout();
+                    skipNextPiPExitAutoStopRef.current = true;
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
+                    void pictureInPictureService.setAutoEnterEnabled(false);
                     showOverlayControls();
                     resetControlsTimer();
                     return;
                 case 'app.mcai.videoplayer.pip.CLOSE':
+                    clearPiPEntryWatchdog();
+                    clearPiPCloseTimeout();
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
                     void pictureInPictureService.setAutoEnterEnabled(false);
-                    if (statusRef.current.isLoaded && statusRef.current.isPlaying) {
-                        player.pause();
-                    }
+                    stopAndPersistResume();
+                    return;
+                case 'app.mcai.videoplayer.pip.SETTINGS':
+                    clearPiPEntryWatchdog();
+                    clearPiPCloseTimeout();
+                    setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
+                    void pictureInPictureService.setAutoEnterEnabled(false);
+                    void openPiPSettings();
                     return;
                 case 'app.mcai.videoplayer.pip.STATE_ENTERED':
+                    clearPiPCloseTimeout();
+                    hasEverEnteredPiPRef.current = true;
                     pipEnteredRef.current = true;
                     pipEntryPendingRef.current = false;
                     if (pipEntryTimeout.current) {
@@ -2346,10 +3053,17 @@ const PlayerScreen = () => {
                     return;
                 case 'app.mcai.videoplayer.pip.STATE_EXITED':
                     clearPiPEntryWatchdog();
+                    clearPiPCloseTimeout();
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
+                    void pictureInPictureService.setAutoEnterEnabled(false);
                     showOverlayControls();
                     resetControlsTimer();
+                    if (skipNextPiPExitAutoStopRef.current) {
+                        skipNextPiPExitAutoStopRef.current = false;
+                        return;
+                    }
+                    stopAndPersistResume();
                     return;
                 default:
                     return;
@@ -2363,28 +3077,53 @@ const PlayerScreen = () => {
     useEffect(() => {
         const sub = DeviceEventEmitter.addListener(
             'McAiOverlayAction',
-            (payload: { action?: string; positionMs?: number }) => {
+            (payload: { action?: string; positionMs?: number; wasPlaying?: boolean }) => {
                 const action = payload?.action;
                 const positionMs = Math.max(0, payload?.positionMs ?? 0);
+                const wasPlaying = !!payload?.wasPlaying;
                 if (action === 'app.mcai.videoplayer.overlay.EXPAND') {
+                    clearPiPCloseTimeout();
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
                     if (statusRef.current.isLoaded) {
                         player.currentTime = positionMs / 1000;
-                        player.play();
+                        if (wasPlaying) {
+                            player.play();
+                        } else {
+                            player.pause();
+                        }
                     }
                     showOverlayControls();
                     resetControlsTimer();
                     return;
                 }
+                if (action === 'app.mcai.videoplayer.overlay.SETTINGS') {
+                    clearPiPCloseTimeout();
+                    setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
+                    if (statusRef.current.isLoaded) {
+                        player.currentTime = positionMs / 1000;
+                        if (wasPlaying) {
+                            player.play();
+                        } else {
+                            player.pause();
+                        }
+                    }
+                    void openPiPSettings();
+                    return;
+                }
                 if (action === 'app.mcai.videoplayer.overlay.CLOSE') {
+                    clearPiPCloseTimeout();
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
                     if (statusRef.current.isLoaded) {
                         player.currentTime = positionMs / 1000;
                     }
+                    void pictureInPictureService.setAutoEnterEnabled(false);
                     showOverlayControls();
                     resetControlsTimer();
+                    stopAndPersistResume(positionMs);
+                    return;
                 }
             }
         );
@@ -2399,18 +3138,25 @@ const PlayerScreen = () => {
     }, [status.isLoaded, equalizerSupported, videoUri]);
 
     useEffect(() => {
-        if (!status.isLoaded || selectedSubtitleId === 'off' || activeSubtitleCues.length === 0) {
+        if (
+            !status.isLoaded ||
+            selectedSubtitleId === 'off' ||
+            activeSubtitleCues.length === 0 ||
+            popUpMode ||
+            isPopUpWindowMounted
+        ) {
             if (activeSubtitleText) {
                 setActiveSubtitleText('');
             }
             return;
         }
-        const nowMs = Math.max(0, status.positionMillis + subtitleSyncMs);
+        // Positive delay means subtitles appear later than the media timestamp.
+        const nowMs = Math.max(0, status.positionMillis - subtitleSyncMs);
         const text = getSubtitleTextAt(activeSubtitleCues, nowMs);
         if (text !== activeSubtitleText) {
             setActiveSubtitleText(text);
         }
-    }, [status, subtitleSyncMs, activeSubtitleCues, selectedSubtitleId, activeSubtitleText]);
+    }, [status, subtitleSyncMs, activeSubtitleCues, selectedSubtitleId, activeSubtitleText, popUpMode, isPopUpWindowMounted]);
 
     useEffect(() => {
         animatePanel(audioPanelAnim, audioPanelVisible);
@@ -2434,20 +3180,49 @@ const PlayerScreen = () => {
 
     // Pop-up player animation ─ springs in on open, fades out on close, scales on expand
     useEffect(() => {
-        if (popUpMode) {
-            popupScaleAnim.setValue(0.2);
+        if (USE_SYSTEM_PIP) {
+            setIsPopUpWindowMounted(false);
+            setPopupExpanded(false);
             popupOpacityAnim.setValue(0);
+            popupScaleAnim.setValue(1);
+            popupTranslateXAnim.setValue(0);
+            popupTranslateYAnim.setValue(0);
+            return;
+        }
+        popupScaleAnim.stopAnimation();
+        popupOpacityAnim.stopAnimation();
+        popupTranslateXAnim.stopAnimation();
+        popupTranslateYAnim.stopAnimation();
+        if (popUpMode) {
+            setIsPopUpWindowMounted(true);
+            popupScaleAnim.setValue(1.06);
+            popupOpacityAnim.setValue(0);
+            popupTranslateXAnim.setValue(-18);
+            popupTranslateYAnim.setValue(36);
             setPopupExpanded(false);
             Animated.parallel([
-                Animated.spring(popupScaleAnim, {
+                Animated.timing(popupScaleAnim, {
                     toValue: 1,
+                    duration: 240,
+                    easing: Easing.out(Easing.cubic),
                     useNativeDriver: true,
-                    tension: 70,
-                    friction: 7,
                 }),
                 Animated.timing(popupOpacityAnim, {
                     toValue: 1,
-                    duration: 180,
+                    duration: 230,
+                    easing: Easing.out(Easing.cubic),
+                    useNativeDriver: true,
+                }),
+                Animated.timing(popupTranslateXAnim, {
+                    toValue: 0,
+                    duration: 255,
+                    easing: Easing.out(Easing.exp),
+                    useNativeDriver: true,
+                }),
+                Animated.timing(popupTranslateYAnim, {
+                    toValue: 0,
+                    duration: 255,
+                    easing: Easing.out(Easing.exp),
                     useNativeDriver: true,
                 }),
             ]).start();
@@ -2455,26 +3230,46 @@ const PlayerScreen = () => {
             setPopupExpanded(false);
             Animated.parallel([
                 Animated.timing(popupScaleAnim, {
-                    toValue: 0.2,
-                    duration: 200,
+                    toValue: 1.01,
+                    duration: 220,
+                    easing: Easing.inOut(Easing.quad),
                     useNativeDriver: true,
                 }),
                 Animated.timing(popupOpacityAnim, {
                     toValue: 0,
-                    duration: 160,
+                    duration: 215,
+                    easing: Easing.inOut(Easing.quad),
                     useNativeDriver: true,
                 }),
-            ]).start();
+                Animated.timing(popupTranslateXAnim, {
+                    toValue: -12,
+                    duration: 220,
+                    easing: Easing.inOut(Easing.quad),
+                    useNativeDriver: true,
+                }),
+                Animated.timing(popupTranslateYAnim, {
+                    toValue: 24,
+                    duration: 220,
+                    easing: Easing.inOut(Easing.quad),
+                    useNativeDriver: true,
+                }),
+            ]).start(({ finished }) => {
+                if (finished && !popUpModeRef.current) {
+                    setIsPopUpWindowMounted(false);
+                }
+            });
         }
-    }, [popUpMode]);
+    }, [popUpMode, popupOpacityAnim, popupScaleAnim, popupTranslateXAnim, popupTranslateYAnim]);
 
     // Tap-to-expand: spring the size scale between 1.0 (mini) and 1.45 (expanded)
     useEffect(() => {
+        popupSizeScale.stopAnimation();
         Animated.spring(popupSizeScale, {
             toValue: popupExpanded ? 1.45 : 1.0,
             useNativeDriver: true,
-            tension: 75,
-            friction: 7,
+            damping: 16,
+            stiffness: 260,
+            mass: 0.75,
         }).start();
     }, [popupExpanded]);
 
@@ -2483,8 +3278,14 @@ const PlayerScreen = () => {
         .filter((d) => d.type === 'person')
         .map((d) => d.metadata?.actorName || d.label);
 
-    const containerPadding = isLandscape ? SPACING.s : SPACING.m;
-    const advancedPanelMaxHeight = isLandscape ? Math.max(240, height - 96) : Math.max(320, Math.floor(height * 0.68));
+    const landscapePanelMaxHeight = Math.max(
+        200,
+        Math.min(
+            Math.floor(height * 0.54),
+            height - ((insets.top || 0) + 180)
+        )
+    );
+    const advancedPanelMaxHeight = isLandscape ? landscapePanelMaxHeight : Math.max(320, Math.floor(height * 0.68));
     const advancedPanelWidth = isLandscape ? Math.min(360, Math.max(270, Math.floor(width * 0.44))) : 280;
     const maxVolumeLevel = playerSettings.audioBoostEnabled ? 2 : 1;
     const sliderMaxMillis = Math.max(stableDurationMillis, status.durationMillis || 0, 1);
@@ -2492,6 +3293,19 @@ const PlayerScreen = () => {
     const displayPositionMillis = isSeeking ? seekPreviewPosition : livePositionMillis;
     const isFloatingTransitionStarting = floatingTransitionState === 'starting';
     const popUpModeLabel = isFloatingTransitionStarting ? 'Starting...' : popUpMode ? 'On' : 'Off';
+    const shouldShowSubtitleOverlay =
+        selectedSubtitleId !== 'off' &&
+        !!activeSubtitleText &&
+        !audioOnlyMode &&
+        !isAnyPanelOpen() &&
+        !popUpMode &&
+        !isPopUpWindowMounted;
+    const subtitleBottomInset = (insets?.bottom || 0) + (isLandscape ? 28 : 38);
+    const subtitleControlsLift = isLandscape ? 162 : 202;
+    const subtitleTranslateY = controlsOpacity.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, -subtitleControlsLift],
+    });
     const videoFrameStyle = (() => {
         if (selectedDisplayMode.id === 'center') {
             return styles.centerVideo;
@@ -2520,8 +3334,15 @@ const PlayerScreen = () => {
     })();
 
     return (
-        <View style={styles.screen}>
-            <StatusBar hidden />
+        <Animated.View
+            style={[
+                styles.screen,
+                {
+                    transform: [{ scale: screenScaleAnim }],
+                },
+            ]}
+        >
+
 
             <Pressable
                 style={styles.videoContainer}
@@ -2537,7 +3358,7 @@ const PlayerScreen = () => {
                 onTouchCancel={handleTouchEnd}
             >
                 {/* Full-screen video stage (normal mode) */}
-                {!popUpMode && (
+                {(USE_SYSTEM_PIP || !popUpMode) && (
                     <Animated.View
                         style={[styles.videoStage, audioOnlyMode && styles.videoStageAudioOnly]}
                         pointerEvents="none"
@@ -2560,7 +3381,7 @@ const PlayerScreen = () => {
                 )}
 
                 {/* Pop-up floating window (popup mode) */}
-                {popUpMode && (
+                {!USE_SYSTEM_PIP && isPopUpWindowMounted && (
                     <Animated.View
                         style={[
                             styles.videoStagePopUp,
@@ -2568,6 +3389,8 @@ const PlayerScreen = () => {
                                 transform: [
                                     { scale: popupScaleAnim },
                                     { scale: popupSizeScale },
+                                    { translateX: popupTranslateXAnim },
+                                    { translateY: popupTranslateYAnim },
                                 ],
                                 opacity: popupOpacityAnim,
                             },
@@ -2596,10 +3419,19 @@ const PlayerScreen = () => {
                     onClose={handleCloseAI}
                 />
 
-                {selectedSubtitleId !== 'off' && !!activeSubtitleText && !audioOnlyMode && (
-                    <View style={styles.subtitleOverlay} pointerEvents="none">
-                        <Text style={styles.subtitleText}>{activeSubtitleText}</Text>
-                    </View>
+                {shouldShowSubtitleOverlay && (
+                    <Animated.View
+                        style={[
+                            styles.subtitleOverlay,
+                            {
+                                bottom: subtitleBottomInset,
+                                transform: [{ translateY: subtitleTranslateY }],
+                            },
+                        ]}
+                        pointerEvents="none"
+                    >
+                        <Text style={[styles.subtitleText, isLandscape && styles.subtitleTextLandscape]}>{activeSubtitleText}</Text>
+                    </Animated.View>
                 )}
 
                 <Animated.View style={[styles.seekFeedbackBadge, { opacity: seekFeedbackOpacity }]}>
@@ -2636,10 +3468,12 @@ const PlayerScreen = () => {
                 )}
 
                 <Animated.View
-                    pointerEvents={showControls ? 'auto' : 'none'}
+                    renderToHardwareTextureAndroid
+                    shouldRasterizeIOS
+                    pointerEvents={(showControls || isAnySettingsPanelOpen) ? 'auto' : 'none'}
                     style={[
                         styles.controlsOverlay,
-                        { opacity: controlsOpacity, paddingHorizontal: containerPadding },
+                        { opacity: controlsOpacity },
                     ]}
                     onTouchStart={handleTouchStart}
                     onTouchMove={handleTouchMove}
@@ -2663,31 +3497,35 @@ const PlayerScreen = () => {
                         </View>
                     ) : (
                         <>
-                            <View style={styles.topBar}>
+                            <Animated.View
+                                renderToHardwareTextureAndroid
+                                shouldRasterizeIOS
+                                style={[
+                                    styles.topBar,
+                                    isLandscape && styles.topBarLandscape,
+                                    {
+                                        transform: [{ translateY: topBarTranslateY }, { scale: topBarScale }],
+                                    },
+                                ]}
+                            >
                                 <TouchableOpacity
-                                    style={styles.topIconButton}
-                                    onPress={() => {
-                                        if (navigation.canGoBack()) {
-                                            navigation.goBack();
-                                        } else {
-                                            navigation.replace('Main');
-                                        }
-                                    }}
+                                    style={[styles.topIconButton, isLandscape && styles.topIconButtonLandscape]}
+                                    onPress={handleClosePlayer}
                                 >
                                     <Ionicons name="arrow-back" size={22} color={colors.white} />
                                 </TouchableOpacity>
                                 <Text style={styles.titleText} numberOfLines={1}>
                                     {title || 'Video'}
                                 </Text>
-                                <View style={styles.topRightActions}>
+                                <View style={[styles.topRightActions, isLandscape && styles.topRightActionsLandscape]}>
                                     <TouchableOpacity
-                                        style={styles.topIconButton}
+                                        style={[styles.topIconButton, isLandscape && styles.topIconButtonLandscape]}
                                         onPress={() => void rotateScreenManually()}
                                     >
                                         <Ionicons name="phone-portrait-outline" size={20} color={colors.white} />
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                        style={[styles.topIconButton, isOrientationLocked && styles.activeTopIconButton]}
+                                        style={[styles.topIconButton, isLandscape && styles.topIconButtonLandscape, isOrientationLocked && styles.activeTopIconButton]}
                                         onPress={() => void toggleOrientationLock()}
                                     >
                                         <Ionicons
@@ -2697,7 +3535,7 @@ const PlayerScreen = () => {
                                         />
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                        style={[styles.topIconButton, isAiAnalyzing && styles.activeTopIconButton]}
+                                        style={[styles.topIconButton, isLandscape && styles.topIconButtonLandscape, isAiAnalyzing && styles.activeTopIconButton]}
                                         onPress={handleAnalyzeScene}
                                         disabled={isAiAnalyzing}
                                     >
@@ -2706,9 +3544,19 @@ const PlayerScreen = () => {
                                         </View>
                                     </TouchableOpacity>
                                 </View>
-                            </View>
+                            </Animated.View>
 
-                            <View style={[styles.bottomCluster, isLandscape && styles.bottomClusterLandscape]}>
+                            <Animated.View
+                                renderToHardwareTextureAndroid
+                                shouldRasterizeIOS
+                                style={[
+                                    styles.bottomCluster,
+                                    isLandscape && styles.bottomClusterLandscape,
+                                    {
+                                        transform: [{ translateY: bottomClusterTranslateY }, { scale: bottomClusterScale }],
+                                    },
+                                ]}
+                            >
                                 {playerSettings.seekButtonsVisible && (
                                     <View style={styles.seekButtonsRow}>
                                         <TouchableOpacity
@@ -2814,13 +3662,17 @@ const PlayerScreen = () => {
                                         <Ionicons name="ellipsis-horizontal" size={22} color={colors.white} />
                                     </TouchableOpacity>
                                 </View>
-                            </View>
+                            </Animated.View>
 
                             {zoomPanelVisible && (
                                 <Animated.View
                                     style={[
                                         styles.bottomPanel,
                                         styles.rightPanel,
+                                        {
+                                            width: Math.min(320, advancedPanelWidth),
+                                            maxHeight: advancedPanelMaxHeight,
+                                        },
                                         {
                                             opacity: zoomPanelAnim,
                                             transform: [
@@ -2835,24 +3687,30 @@ const PlayerScreen = () => {
                                     ]}
                                 >
                                     <Text style={styles.panelTitle}>Zoom Options</Text>
-                                    {DISPLAY_MODES.map((mode) => (
-                                        <TouchableOpacity
-                                            key={mode.id}
-                                            style={styles.panelItem}
-                                            onPress={() => {
-                                                handleSetDisplayMode(mode);
-                                                setZoomPanelVisible(false);
-                                                flashSeekFeedback(mode.label);
-                                                resetControlsTimer();
-                                            }}
-                                        >
-                                            <Ionicons name="resize-outline" size={18} color={colors.white} />
-                                            <Text style={styles.panelItemText}>
-                                                {mode.label}
-                                                {selectedDisplayMode.id === mode.id ? '  *' : ''}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
+                                    <ScrollView
+                                        style={styles.morePanelScroll}
+                                        contentContainerStyle={styles.morePanelScrollContent}
+                                        showsVerticalScrollIndicator={false}
+                                    >
+                                        {DISPLAY_MODES.map((mode) => (
+                                            <TouchableOpacity
+                                                key={mode.id}
+                                                style={styles.panelItem}
+                                                onPress={() => {
+                                                    handleSetDisplayMode(mode);
+                                                    setZoomPanelVisible(false);
+                                                    flashSeekFeedback(mode.label);
+                                                    resetControlsTimer();
+                                                }}
+                                            >
+                                                <Ionicons name="resize-outline" size={18} color={colors.white} />
+                                                <Text style={styles.panelItemText}>
+                                                    {mode.label}
+                                                    {selectedDisplayMode.id === mode.id ? '  *' : ''}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </ScrollView>
                                     <Text style={styles.panelMetaText}>Tip: Long press zoom icon for this full list.</Text>
                                 </Animated.View>
                             )}
@@ -3012,7 +3870,7 @@ const PlayerScreen = () => {
                                                         onPress={() => handleAdjustSubtitleDelay(-100)}
                                                     >
                                                         <Ionicons name="remove-outline" size={18} color={colors.white} />
-                                                        <Text style={styles.subtitleActionText}>Delay</Text>
+                                                        <Text style={styles.subtitleActionText}>-100ms</Text>
                                                     </TouchableOpacity>
                                                     <Text style={styles.subtitleDelayValue}>{subtitleSyncMs}ms</Text>
                                                     <TouchableOpacity
@@ -3020,7 +3878,7 @@ const PlayerScreen = () => {
                                                         onPress={() => handleAdjustSubtitleDelay(100)}
                                                     >
                                                         <Ionicons name="add-outline" size={18} color={colors.white} />
-                                                        <Text style={styles.subtitleActionText}>Delay</Text>
+                                                        <Text style={styles.subtitleActionText}>+100ms</Text>
                                                     </TouchableOpacity>
                                                 </View>
 
@@ -3473,11 +4331,11 @@ const PlayerScreen = () => {
                 isAnalyzing={isAiAnalyzing}
                 onClose={handleCloseAI}
             />
-        </View>
+        </Animated.View>
     );
 };
 
-const useStyles = (colors: any) => StyleSheet.create({
+const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
     screen: {
         flex: 1,
         backgroundColor: colors.black,
@@ -3490,6 +4348,7 @@ const useStyles = (colors: any) => StyleSheet.create({
         ...StyleSheet.absoluteFillObject,
         alignItems: 'center',
         justifyContent: 'center',
+        backgroundColor: '#000',
     },
     videoStagePopUp: {
         position: 'absolute',
@@ -3515,6 +4374,7 @@ const useStyles = (colors: any) => StyleSheet.create({
     video: {
         width: '100%',
         height: '100%',
+        backgroundColor: '#000',
     },
     centerVideo: {
         width: '88%',
@@ -3730,32 +4590,38 @@ const useStyles = (colors: any) => StyleSheet.create({
     // ── Subtitles ────────────────────────────────────────────────────
     subtitleOverlay: {
         position: 'absolute',
-        left: SPACING.m,
-        right: SPACING.m,
-        bottom: '19%',
+        left: SPACING.m + (insets?.left || 0),
+        right: SPACING.m + (insets?.right || 0),
+        bottom: 0,
         alignItems: 'center',
         zIndex: 3,
     },
     subtitleText: {
         color: colors.white,
-        backgroundColor: 'rgba(0,0,0,0.72)',
-        paddingHorizontal: SPACING.m,
-        paddingVertical: 7,
-        borderRadius: RADIUS.s,
+        backgroundColor: 'transparent',
+        paddingHorizontal: 0,
+        paddingVertical: 0,
+        borderRadius: 0,
         fontSize: FONT_SIZE.m,
         fontWeight: FONT_WEIGHT.semiBold,
         textAlign: 'center',
         lineHeight: 22,
+        maxWidth: '96%',
         textShadowColor: 'rgba(0,0,0,0.8)',
         textShadowOffset: { width: 0, height: 1 },
         textShadowRadius: 3,
+    },
+    subtitleTextLandscape: {
+        fontSize: FONT_SIZE.s,
+        lineHeight: 20,
     },
     // ── Controls overlay ────────────────────────────────────────────
     controlsOverlay: {
         ...StyleSheet.absoluteFillObject,
         justifyContent: 'space-between',
-        paddingTop: SPACING.s,
-        paddingBottom: SPACING.l,
+        paddingTop: Math.max(SPACING.s, insets?.top || 0),
+        paddingBottom: Math.max(SPACING.l, (insets?.bottom || 0) + 8),
+        paddingHorizontal: Math.max(SPACING.s, insets?.left || 0, insets?.right || 0),
         backgroundColor: 'rgba(0,0,0,0.60)',
     },
     topBar: {
@@ -3764,6 +4630,11 @@ const useStyles = (colors: any) => StyleSheet.create({
         justifyContent: 'space-between',
         marginTop: SPACING.s,
         paddingHorizontal: SPACING.s,
+        zIndex: 30,
+    },
+    topBarLandscape: {
+        marginTop: Math.max(2, SPACING.xs),
+        paddingHorizontal: SPACING.xs,
     },
     topIconButton: {
         width: 40,
@@ -3774,6 +4645,10 @@ const useStyles = (colors: any) => StyleSheet.create({
         backgroundColor: 'rgba(0,0,0,0.60)',
         borderWidth: 1,
         borderColor: 'rgba(255,255,255,0.15)',
+    },
+    topIconButtonLandscape: {
+        width: 36,
+        height: 36,
     },
     activeTopIconButton: {
         backgroundColor: colors.primarySubtle,
@@ -3794,6 +4669,9 @@ const useStyles = (colors: any) => StyleSheet.create({
     topRightActions: {
         flexDirection: 'row',
         gap: SPACING.xs,
+    },
+    topRightActionsLandscape: {
+        gap: 4,
     },
     aiBadgeContainer: {
         width: 24,
@@ -3896,7 +4774,7 @@ const useStyles = (colors: any) => StyleSheet.create({
     // ── Side panels (volume/more) ───────────────────────────────────
     bottomPanel: {
         position: 'absolute',
-        bottom: 108,
+        bottom: 108 + (insets?.bottom || 0),
         width: 252,
         borderRadius: RADIUS.l,
         padding: SPACING.m,
@@ -3908,12 +4786,13 @@ const useStyles = (colors: any) => StyleSheet.create({
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: 0.55,
         shadowRadius: 16,
+        zIndex: 18,
     },
     leftPanel: {
-        left: SPACING.m,
+        left: SPACING.m + (insets?.left || 0),
     },
     rightPanel: {
-        right: SPACING.m,
+        right: SPACING.m + (insets?.right || 0),
     },
     morePanelScroll: {
         flex: 1,
@@ -3931,8 +4810,8 @@ const useStyles = (colors: any) => StyleSheet.create({
     },
     playlistPanel: {
         position: 'absolute',
-        bottom: 80,
-        right: SPACING.m,
+        bottom: 80 + (insets?.bottom || 0),
+        right: SPACING.m + (insets?.right || 0),
         width: 320,
         maxHeight: '60%',
         borderRadius: RADIUS.l,
@@ -3974,9 +4853,9 @@ const useStyles = (colors: any) => StyleSheet.create({
     // ── Audio/subtitle sheet ────────────────────────────────────────
     audioSubtitleSheet: {
         position: 'absolute',
-        left: SPACING.m,
-        right: SPACING.m,
-        bottom: 100,
+        left: SPACING.m + (insets?.left || 0),
+        right: SPACING.m + (insets?.right || 0),
+        bottom: 100 + (insets?.bottom || 0),
         maxHeight: '60%',
         borderRadius: RADIUS.l,
         paddingTop: SPACING.s,

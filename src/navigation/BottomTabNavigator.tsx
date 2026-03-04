@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { RADIUS, SPACING } from '../constants/theme';
 import { useThemeContext } from '../context/ThemeContext';
@@ -29,7 +29,7 @@ const TAB_CONFIG: Record<string, { outline: keyof typeof Ionicons.glyphMap; fill
 const TabIcon = ({ focused, color, size, route, colors }: IconProps) => {
     const cfg = TAB_CONFIG[route.name];
     const iconName = cfg ? (focused ? cfg.filled : cfg.outline) : 'ellipsis-horizontal-outline';
-    const insets = useSafeAreaInsets();
+    const insets = initialWindowMetrics?.insets ?? useSafeAreaInsets();
     const styles = useStyles(colors, insets);
 
     return (
@@ -41,11 +41,12 @@ const TabIcon = ({ focused, color, size, route, colors }: IconProps) => {
 
 const BottomTabNavigator = () => {
     const { colors } = useThemeContext();
-    const insets = useSafeAreaInsets();
+    const insets = initialWindowMetrics?.insets ?? useSafeAreaInsets();
     const styles = useStyles(colors, insets);
 
     return (
         <Tab.Navigator
+            detachInactiveScreens={true}
             screenOptions={({ route }) => ({
                 tabBarIcon: ({ focused, color, size }) => (
                     <TabIcon focused={focused} color={color} size={size} route={route} colors={colors} />
@@ -62,6 +63,7 @@ const BottomTabNavigator = () => {
                 tabBarItemStyle: styles.tabBarItem,
                 headerStyle: styles.header,
                 headerTintColor: colors.text,
+                freezeOnBlur: true,
                 headerTitleStyle: {
                     fontWeight: '700',
                     fontSize: 17,

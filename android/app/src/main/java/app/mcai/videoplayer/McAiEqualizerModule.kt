@@ -2,128 +2,197 @@ package app.mcai.videoplayer
 
 import android.media.audiofx.Equalizer
 import android.media.audiofx.LoudnessEnhancer
+import android.os.Build
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
 import kotlin.math.roundToInt
 
-class McAiEqualizerModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class McAiEqualizerModule(private val reactContext: ReactApplicationContext) :
+  ReactContextBaseJavaModule(reactContext) {
+
+  private val lock = Any()
+  private var audioSessionId: Int = 0
+  private var enabled = false
+  private var preampDb = 0f
+  private val bandGainsDb = mutableMapOf<Int, Float>()
   private var equalizer: Equalizer? = null
   private var loudnessEnhancer: LoudnessEnhancer? = null
-  private var attachedSessionId: Int = -1
 
   override fun getName(): String = "McAiEqualizer"
 
   @ReactMethod
   fun isSupported(promise: Promise) {
-    promise.resolve(true)
+    promise.resolve(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT)
   }
 
   @ReactMethod
   fun attachToPlayerSession(sessionId: Int, promise: Promise) {
     try {
-      val normalizedSessionId = if (sessionId <= 0) 0 else sessionId
-      if (attachedSessionId == normalizedSessionId && equalizer != null) {
-        promise.resolve(null)
-        return
+      synchronized(lock) {
+        attachInternal(sessionId)
       }
-      releaseInternal()
-      equalizer = Equalizer(0, normalizedSessionId).apply {
-        enabled = true
-      }
-      loudnessEnhancer = LoudnessEnhancer(normalizedSessionId).apply {
-        enabled = true
-      }
-      attachedSessionId = normalizedSessionId
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_ATTACH_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_ATTACH_SESSION", error.message, error)
     }
   }
 
   @ReactMethod
-  fun setEnabled(enabled: Boolean, promise: Promise) {
+  fun setEnabled(value: Boolean, promise: Promise) {
     try {
-      equalizer?.enabled = enabled
-      loudnessEnhancer?.enabled = enabled
+      synchronized(lock) {
+        enabled = value
+        equalizer?.enabled = value
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+          loudnessEnhancer?.enabled = value
+        }
+      }
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_ENABLE_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_SET_ENABLED", error.message, error)
     }
   }
 
   @ReactMethod
   fun setPreampDb(value: Double, promise: Promise) {
     try {
-      val targetGainMb = ((value.coerceIn(-20.0, 20.0)).coerceAtLeast(0.0) * 100.0).roundToInt()
-      loudnessEnhancer?.setTargetGain(targetGainMb)
+      synchronized(lock) {
+        preampDb = clampDb(value.toFloat())
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+          loudnessEnhancer?.setTargetGain((preampDb * 100f).roundToInt())
+          if (enabled) {
+            loudnessEnhancer?.enabled = true
+          }
+        }
+      }
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_PREAMP_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_SET_PREAMP", error.message, error)
     }
   }
 
   @ReactMethod
   fun setBandGainDb(index: Int, value: Double, promise: Promise) {
     try {
-      val eq = equalizer
-      if (eq == null) {
-        promise.resolve(null)
-        return
+      synchronized(lock) {
+        val clampedDb = clampDb(value.toFloat())
+        bandGainsDb[index] = clampedDb
+        applyBandGain(index, clampedDb)
       }
-      val band = index.coerceIn(0, eq.numberOfBands.toInt() - 1)
-      val valueMb = (value.coerceIn(-20.0, 20.0) * 100.0).roundToInt()
-      val range = eq.bandLevelRange
-      val clamped = valueMb.coerceIn(range[0].toInt(), range[1].toInt()).toShort()
-      eq.setBandLevel(band.toShort(), clamped)
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_BAND_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_SET_BAND", error.message, error)
     }
   }
 
   @ReactMethod
   fun reset(promise: Promise) {
     try {
-      val eq = equalizer
-      if (eq != null) {
-        val count = eq.numberOfBands.toInt()
-        for (i in 0 until count) {
-          eq.setBandLevel(i.toShort(), 0.toShort())
+      synchronized(lock) {
+        preampDb = 0f
+        bandGainsDb.clear()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+          loudnessEnhancer?.setTargetGain(0)
+        }
+        equalizer?.let { eq ->
+          val bands = eq.numberOfBands.toInt()
+          for (band in 0 until bands) {
+            applyBandGain(band, 0f)
+          }
         }
       }
-      loudnessEnhancer?.setTargetGain(0)
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_RESET_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_RESET", error.message, error)
     }
   }
 
   @ReactMethod
   fun release(promise: Promise) {
     try {
-      releaseInternal()
+      synchronized(lock) {
+        releaseInternal()
+      }
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("EQ_RELEASE_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_RELEASE", error.message, error)
     }
   }
 
   override fun invalidate() {
-    releaseInternal()
+    synchronized(lock) {
+      releaseInternal()
+    }
     super.invalidate()
+  }
+
+  private fun attachInternal(sessionId: Int) {
+    if (audioSessionId == sessionId && (equalizer != null || loudnessEnhancer != null)) {
+      return
+    }
+
+    releaseInternal()
+    audioSessionId = sessionId
+    val targetSession = if (sessionId > 0) sessionId else 0
+
+    equalizer = try {
+      Equalizer(0, targetSession).apply {
+        enabled = this@McAiEqualizerModule.enabled
+      }
+    } catch (_: Throwable) {
+      null
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+      loudnessEnhancer = try {
+        LoudnessEnhancer(targetSession).apply {
+          setTargetGain((preampDb * 100f).roundToInt())
+          enabled = this@McAiEqualizerModule.enabled
+        }
+      } catch (_: Throwable) {
+        null
+      }
+    }
+
+    bandGainsDb.forEach { (index, db) ->
+      applyBandGain(index, db)
+    }
+  }
+
+  private fun applyBandGain(index: Int, db: Float) {
+    val eq = equalizer ?: return
+    val bandCount = eq.numberOfBands.toInt()
+    if (index < 0 || index >= bandCount) {
+      return
+    }
+    val range = eq.bandLevelRange
+    val minLevel = range[0].toInt()
+    val maxLevel = range[1].toInt()
+    val level = (db * 100f).roundToInt().coerceIn(minLevel, maxLevel)
+    eq.setBandLevel(index.toShort(), level.toShort())
   }
 
   private fun releaseInternal() {
     try {
       equalizer?.release()
-    } catch (_: Exception) {}
-    try {
-      loudnessEnhancer?.release()
-    } catch (_: Exception) {}
-    equalizer = null
-    loudnessEnhancer = null
-    attachedSessionId = -1
+    } catch (_: Throwable) {
+    } finally {
+      equalizer = null
+    }
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+      try {
+        loudnessEnhancer?.release()
+      } catch (_: Throwable) {
+      } finally {
+        loudnessEnhancer = null
+      }
+    }
+  }
+
+  private fun clampDb(value: Float): Float {
+    return value.coerceIn(-20f, 20f)
   }
 }

@@ -14,4 +14,3 @@ class McAiPictureInPicturePackage : ReactPackage {
     return emptyList()
   }
 }
-

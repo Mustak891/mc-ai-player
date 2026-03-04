@@ -20,6 +20,13 @@ allprojects {
   }
 }
 
+subprojects {
+  configurations.configureEach {
+    resolutionStrategy.dependencySubstitution {
+      substitute module("host.exp.exponent:expo.modules.video") using project(":expo-video-local")
+    }
+  }
+}
+
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
-

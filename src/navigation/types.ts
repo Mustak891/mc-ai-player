@@ -4,6 +4,7 @@ export type RootStackParamList = {
         videoUri: string;
         title?: string;
         subtitleCandidates?: Array<{ uri: string; name: string }>;
+        initialResumePositionMillis?: number;
     };
     PrivacyPolicy: undefined;
     TermsAndConditions: undefined;

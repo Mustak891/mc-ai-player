@@ -9,6 +9,11 @@ export type PlaybackPrefs = {
     subtitleTrackId?: string;
     subtitleTrackLabel?: string;
     subtitleSyncMs?: number;
+    externalSubtitles?: Array<{
+        id: string;
+        label: string;
+        uri: string;
+    }>;
 };
 
 type PlaybackPrefsStore = Record<string, PlaybackPrefs>;
@@ -44,4 +49,3 @@ export const savePlaybackPrefs = async (uri: string, prefs: PlaybackPrefs): Prom
         // Best effort only.
     }
 };
-

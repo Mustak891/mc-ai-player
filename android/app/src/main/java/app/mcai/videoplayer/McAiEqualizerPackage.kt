@@ -14,4 +14,3 @@ class McAiEqualizerPackage : ReactPackage {
     return emptyList()
   }
 }
-

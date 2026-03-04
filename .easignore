@@ -7,12 +7,16 @@ node_modules
 dist
 web-build
 
-# Local and generated native build outputs
+# Local and generated native build folders
+android
+ios
 .gradle
 android/.gradle
 android/build
 android/app/build
+android/app/.cxx
 ios/build
+temp_nextlib
 
 # Logs/temp
 *.log

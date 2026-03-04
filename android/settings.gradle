@@ -37,3 +37,7 @@ expoAutolinking.useExpoVersionCatalog()
 
 include ':app'
 includeBuild(expoAutolinking.reactNativeGradlePlugin)
+
+// Use local expo-video source so native codec patches in node_modules/expo-video are actually compiled.
+include ':expo-video-local'
+project(':expo-video-local').projectDir = new File(rootDir, '../node_modules/expo-video/android')

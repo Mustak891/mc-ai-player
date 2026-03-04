@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState, useEffect, useRef, useMemo } from 'react';
 import {
     View,
     Text,
@@ -8,10 +8,11 @@ import {
     TouchableOpacity,
     TextInput,
     Keyboard,
+    InteractionManager,
 } from 'react-native';
-import { useFocusEffect, useNavigation, useIsFocused } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import * as MediaLibrary from 'expo-media-library';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -21,88 +22,200 @@ import { useVideoLibrary } from '../hooks/useVideoLibrary';
 import VideoCard from '../components/VideoCard';
 import DisplaySettingsModal from '../components/DisplaySettingsModal';
 import { RootStackParamList } from '../navigation/types';
-import { readResumeStore } from '../utils/resumeStore';
+import { readResumeInfoStore, readResumeStore, ResumeStoreEntry } from '../utils/resumeStore';
 import { useSettingsStore } from '../store/settingsStore';
+
+const shallowEqualNumberMap = (a: Record<string, number>, b: Record<string, number>) => {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+        if ((a[key] ?? 0) !== (b[key] ?? 0)) return false;
+    }
+    return true;
+};
+
+const shallowEqualResumeInfoMap = (
+    a: Record<string, ResumeStoreEntry>,
+    b: Record<string, ResumeStoreEntry>
+) => {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+        const aEntry = a[key];
+        const bEntry = b[key];
+        if (!aEntry && !bEntry) continue;
+        if (!aEntry || !bEntry) return false;
+        if ((aEntry.positionMillis ?? 0) !== (bEntry.positionMillis ?? 0)) return false;
+        if ((aEntry.updatedAt ?? 0) !== (bEntry.updatedAt ?? 0)) return false;
+    }
+    return true;
+};
+
+const OPEN_VIDEO_DEDUP_WINDOW_MS = 650;
 
 const VideoLibraryScreen = () => {
     const { colors } = useThemeContext();
-    const insets = useSafeAreaInsets();
-    const styles = useStyles(colors, insets);
+    const insets = initialWindowMetrics?.insets ?? useSafeAreaInsets();
+    const styles = useMemo(
+        () => useStyles(colors, insets),
+        [colors, insets.top, insets.bottom]
+    );
 
     const { viewMode, sortBy, sortOrder, isIncognito, setIsIncognito } = useSettingsStore();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
     const [resumeMap, setResumeMap] = useState<Record<string, number>>({});
+    const resumeMapRef = useRef<Record<string, number>>({});
 
     // Header UI State
     const [isSearching, setIsSearching] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [lastPlayedUri, setLastPlayedUri] = useState<string | null>(null);
     const [lastPlayedTitle, setLastPlayedTitle] = useState<string | null>(null);
+    const [resumeInfoMap, setResumeInfoMap] = useState<Record<string, ResumeStoreEntry>>({});
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+    const lastOpenVideoRef = useRef<{ uri: string; at: number } | null>(null);
 
-    // Defer heavy disk scanning until this screen is explicitly brought to the foreground
-    const isFocused = useIsFocused();
-    const [hasFocused, setHasFocused] = useState(false);
+    // Use libraryReady to defer the initial scan until after navigation animations
+    // have fully settled. Avoids a re-render flash during the open/close transition.
+    const [libraryReady, setLibraryReady] = useState(false);
 
-    useEffect(() => {
-        if (isFocused && !hasFocused) {
-            setHasFocused(true);
+    const { videos, isLoading, refetch } = useVideoLibrary(!libraryReady);
+
+    const handleVideoPress = useCallback((video: MediaLibrary.Asset | { uri: string, filename: string }) => {
+        const now = Date.now();
+        const lastOpen = lastOpenVideoRef.current;
+        if (lastOpen && lastOpen.uri === video.uri && now - lastOpen.at < OPEN_VIDEO_DEDUP_WINDOW_MS) {
+            return;
         }
-    }, [isFocused, hasFocused]);
+        lastOpenVideoRef.current = { uri: video.uri, at: now };
+        navigation.navigate('Player', {
+            videoUri: video.uri,
+            title: video.filename,
+            initialResumePositionMillis: resumeMapRef.current[video.uri] ?? 0,
+        });
+    }, [navigation]);
 
-    const { videos, isLoading, refetch } = useVideoLibrary(!hasFocused);
-
-    const handleVideoPress = (video: MediaLibrary.Asset | { uri: string, filename: string }) => {
-        navigation.navigate('Player', { videoUri: video.uri, title: video.filename });
+    const getFileNameFromUri = (uri: string) => {
+        try {
+            const decoded = decodeURIComponent(uri);
+            const candidate = decoded.split('/').pop() || decoded;
+            return candidate.trim() || 'Last Video';
+        } catch {
+            const candidate = uri.split('/').pop() || uri;
+            return candidate.trim() || 'Last Video';
+        }
     };
 
     useFocusEffect(
         useCallback(() => {
             let active = true;
-            void (async () => {
-                const store = await readResumeStore();
-                if (active) {
-                    setResumeMap(store);
-
-                    // Determine Last Played video (highest timestamp or basically anything recorded)
-                    // For a true "last played timeline", we'd need a separate timestamp store,
-                    // but we can grab one from the resumeMap keys. In a robust app, you'd store date modified.
-                    // For now, let's just show an icon if *any* resume state exists.
-                    const uris = Object.keys(store);
-                    if (uris.length > 0) {
-                        const mostRecentUri = uris[uris.length - 1]; // Naive pick
-                        setLastPlayedUri(mostRecentUri);
-                        const matchedVideo = videos.find(v => v.uri === mostRecentUri);
-                        setLastPlayedTitle(matchedVideo?.filename || 'Last Video');
-                    } else {
-                        setLastPlayedUri(null);
-                    }
+            const task = InteractionManager.runAfterInteractions(() => {
+                // Mark the library as ready for the first time AFTER animations settle.
+                // This prevents a re-render during the navigation transition that caused the flash.
+                if (!libraryReady) {
+                    setLibraryReady(true);
                 }
-            })();
-            return () => { active = false; };
-        }, [])
+                void (async () => {
+                    const [store, infoStore] = await Promise.all([
+                        readResumeStore(),
+                        readResumeInfoStore(),
+                    ]);
+                    if (!active) return;
+                    setResumeMap((prev) => (shallowEqualNumberMap(prev, store) ? prev : store));
+                    setResumeInfoMap((prev) =>
+                        shallowEqualResumeInfoMap(prev, infoStore) ? prev : infoStore
+                    );
+                })();
+            });
+            return () => {
+                active = false;
+                task.cancel();
+            };
+        }, [libraryReady])
     );
 
-    const filteredVideos = videos
-        .filter((v) => v.filename.toLowerCase().includes(searchQuery.toLowerCase()))
-        .sort((a, b) => {
-            let res = 0;
-            if (sortBy === 'name') {
-                res = a.filename.localeCompare(b.filename);
-            } else if (sortBy === 'length') {
-                res = a.duration - b.duration;
-            } else if (sortBy === 'date') {
-                res = a.modificationTime - b.modificationTime;
-            }
-            return sortOrder === 'asc' ? res : -res;
-        });
+    useEffect(() => {
+        resumeMapRef.current = resumeMap;
+    }, [resumeMap]);
 
-    const handleLastPlayed = () => {
+    useEffect(() => {
+        const videoUris = new Set(videos.map((video) => video.uri));
+
+        const pickMostRecent = (entries: Array<[string, ResumeStoreEntry]>) => {
+            if (entries.length === 0) return null;
+            const sorted = [...entries].sort((a, b) => {
+                const deltaUpdated = (b[1]?.updatedAt || 0) - (a[1]?.updatedAt || 0);
+                if (deltaUpdated !== 0) return deltaUpdated;
+                return (b[1]?.positionMillis || 0) - (a[1]?.positionMillis || 0);
+            });
+            return sorted[0]?.[0] ?? null;
+        };
+
+        const validEntries = Object.entries(resumeInfoMap).filter(
+            ([, info]) => (info?.positionMillis || 0) > 0
+        );
+        if (validEntries.length === 0) {
+            setLastPlayedUri(null);
+            setLastPlayedTitle(null);
+            return;
+        }
+
+        const inLibrary = validEntries.filter(([uri]) => videoUris.has(uri));
+        const mostRecentUri = pickMostRecent(inLibrary) || pickMostRecent(validEntries);
+        if (!mostRecentUri) {
+            setLastPlayedUri(null);
+            setLastPlayedTitle(null);
+            return;
+        }
+
+        const matchedVideo = videos.find((video) => video.uri === mostRecentUri);
+        setLastPlayedUri(mostRecentUri);
+        setLastPlayedTitle(matchedVideo?.filename || getFileNameFromUri(mostRecentUri));
+    }, [videos, resumeInfoMap]);
+
+    const filteredVideos = useMemo(() => {
+        const normalizedQuery = searchQuery.trim().toLowerCase();
+        return videos
+            .filter((video) => video.filename.toLowerCase().includes(normalizedQuery))
+            .sort((a, b) => {
+                let res = 0;
+                if (sortBy === 'name') {
+                    res = a.filename.localeCompare(b.filename);
+                } else if (sortBy === 'length') {
+                    res = a.duration - b.duration;
+                } else if (sortBy === 'date') {
+                    res = a.modificationTime - b.modificationTime;
+                }
+                return sortOrder === 'asc' ? res : -res;
+            });
+    }, [videos, searchQuery, sortBy, sortOrder]);
+
+    const handleLastPlayed = useCallback(() => {
         if (lastPlayedUri && lastPlayedTitle) {
             handleVideoPress({ uri: lastPlayedUri, filename: lastPlayedTitle });
         }
-    };
+    }, [handleVideoPress, lastPlayedTitle, lastPlayedUri]);
+
+    const renderVideoItem = useCallback(
+        ({ item }: { item: MediaLibrary.Asset }) => (
+            <VideoCard
+                video={item}
+                onPress={handleVideoPress}
+                resumePositionMillis={resumeMap[item.uri] ?? 0}
+            />
+        ),
+        [handleVideoPress, resumeMap]
+    );
+
+    const videoKeyExtractor = useCallback((item: MediaLibrary.Asset) => item.id, []);
+
+    const listContentStyle = useMemo(
+        () => [styles.listContent, { paddingBottom: SPACING.xl + insets.bottom }],
+        [styles.listContent, insets.bottom]
+    );
 
     return (
         <View style={styles.container}>
@@ -186,18 +299,17 @@ const VideoLibraryScreen = () => {
             <FlatList
                 data={filteredVideos}
                 key={viewMode} // Force re-render on grid/list toggle
-                renderItem={({ item }) => (
-                    <VideoCard
-                        video={item}
-                        onPress={handleVideoPress}
-                        resumePositionMillis={resumeMap[item.uri] ?? 0}
-                    />
-                )}
-                keyExtractor={(item) => item.id}
+                renderItem={renderVideoItem}
+                keyExtractor={videoKeyExtractor}
                 numColumns={viewMode === 'grid' ? 2 : 1}
-                contentContainerStyle={[styles.listContent, { paddingBottom: SPACING.xl + insets.bottom }]}
+                contentContainerStyle={listContentStyle}
                 onRefresh={refetch}
                 refreshing={isLoading}
+                initialNumToRender={12}
+                maxToRenderPerBatch={8}
+                updateCellsBatchingPeriod={50}
+                windowSize={7}
+                removeClippedSubviews
                 ListEmptyComponent={
                     <View style={styles.emptyState}>
                         <Ionicons name="videocam-off-outline" size={64} color={colors.textMuted} />

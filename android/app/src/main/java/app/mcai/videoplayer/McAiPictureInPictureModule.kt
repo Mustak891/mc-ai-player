@@ -1,8 +1,8 @@
 package app.mcai.videoplayer
 
-import android.app.PictureInPictureParams
-import android.app.PendingIntent
 import android.app.AppOpsManager
+import android.app.PendingIntent
+import android.app.PictureInPictureParams
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,19 +10,27 @@ import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Process
+import android.provider.Settings
 import android.util.Rational
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
-class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
+class McAiPictureInPictureModule(
+  private val reactContext: ReactApplicationContext
+) : ReactContextBaseJavaModule(reactContext) {
+  init {
+    setReactContext(reactContext)
+  }
+
   override fun getName(): String = "McAiPictureInPicture"
 
   @ReactMethod
   fun isSupported(promise: Promise) {
-    val hasFeature = reactApplicationContext.packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
-    promise.resolve(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && hasFeature)
+    promise.resolve(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
   }
 
   @ReactMethod
@@ -55,7 +63,7 @@ class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactC
       }
       promise.resolve(mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT)
     } catch (_: Exception) {
-      // If OEM API behavior is inconsistent, don't block the user on detection.
+      // OEM behavior differs; default to true so we do not block entry.
       promise.resolve(true)
     }
   }
@@ -82,8 +90,8 @@ class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactC
           return@runOnUiThread
         }
         promise.reject("PIP_ENTER_FAILED", "PiP enter returned false")
-      } catch (e: Exception) {
-        promise.reject("PIP_ENTER_FAILED", e.message, e)
+      } catch (error: Exception) {
+        promise.reject("PIP_ENTER_FAILED", error.message, error)
       }
     }
   }
@@ -108,38 +116,41 @@ class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactC
           .build()
         activity.setPictureInPictureParams(params)
         promise.resolve(null)
-      } catch (e: Exception) {
-        promise.reject("PIP_UPDATE_ACTIONS_FAILED", e.message, e)
+      } catch (error: Exception) {
+        promise.reject("PIP_UPDATE_ACTIONS_FAILED", error.message, error)
       }
     }
   }
 
   @ReactMethod
   fun openSettings(promise: Promise) {
-    val activity = reactApplicationContext.currentActivity
-    if (activity == null) {
-      promise.reject("PIP_NO_ACTIVITY", "Current activity is null")
-      return
-    }
-    activity.runOnUiThread {
-      try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-          val intent = Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS").apply {
-            data = Uri.parse("package:${activity.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          }
-          activity.startActivity(intent)
-        } else {
-          val intent = Intent("android.settings.APPLICATION_DETAILS_SETTINGS").apply {
-            data = Uri.parse("package:${activity.packageName}")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          }
-          activity.startActivity(intent)
+    try {
+      val packageUri = Uri.parse("package:${reactApplicationContext.packageName}")
+      val fallbackIntents = listOf(
+        Intent("android.settings.PICTURE_IN_PICTURE_SETTINGS").apply {
+          data = packageUri
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+          data = packageUri
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Settings.ACTION_SETTINGS).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
-        promise.resolve(null)
-      } catch (e: Exception) {
-        promise.reject("PIP_OPEN_SETTINGS_FAILED", e.message, e)
+      )
+
+      val intentToLaunch = fallbackIntents.firstOrNull { intent ->
+        intent.resolveActivity(reactApplicationContext.packageManager) != null
       }
+      if (intentToLaunch == null) {
+        promise.reject("PIP_OPEN_SETTINGS_FAILED", "No settings activity available")
+        return
+      }
+      reactApplicationContext.startActivity(intentToLaunch)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("PIP_OPEN_SETTINGS_FAILED", error.message, error)
     }
   }
 
@@ -152,39 +163,39 @@ class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactC
         promise.reject("PIP_BRING_FRONT_FAILED", "Launch intent not found")
         return
       }
-      launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+      launch.addFlags(
+        Intent.FLAG_ACTIVITY_NEW_TASK or
+          Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+          Intent.FLAG_ACTIVITY_SINGLE_TOP
+      )
       reactApplicationContext.startActivity(launch)
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("PIP_BRING_FRONT_FAILED", e.message, e)
+    } catch (error: Exception) {
+      promise.reject("PIP_BRING_FRONT_FAILED", error.message, error)
     }
   }
 
   private fun buildActions(isPlaying: Boolean): List<android.app.RemoteAction> {
     return listOf(
       remoteAction(
+        PictureInPictureController.ACTION_BACKWARD,
+        android.R.drawable.ic_media_rew,
+        "Back 10s"
+      ),
+      remoteAction(
         PictureInPictureController.ACTION_PLAY_PAUSE,
         if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
         if (isPlaying) "Pause" else "Play"
       ),
       remoteAction(
-        PictureInPictureController.ACTION_EXPAND,
-        android.R.drawable.ic_menu_view,
-        "Maximize"
-      ),
-      remoteAction(
-        PictureInPictureController.ACTION_CLOSE,
-        android.R.drawable.ic_menu_close_clear_cancel,
-        "Close"
-      ),
+        PictureInPictureController.ACTION_FORWARD,
+        android.R.drawable.ic_media_ff,
+        "Forward 10s"
+      )
     )
   }
 
-  private fun buildPipParams(
-    aspectRatioWidth: Int,
-    aspectRatioHeight: Int,
-    isPlaying: Boolean
-  ): PictureInPictureParams {
+  private fun buildPipParams(aspectRatioWidth: Int, aspectRatioHeight: Int, isPlaying: Boolean): PictureInPictureParams {
     val builder = PictureInPictureParams.Builder()
       .setAspectRatio(Rational(aspectRatioWidth, aspectRatioHeight))
       .setActions(buildActions(isPlaying))
@@ -208,5 +219,35 @@ class McAiPictureInPictureModule(reactContext: ReactApplicationContext) : ReactC
       title,
       pendingIntent
     )
+  }
+
+  override fun invalidate() {
+    if (reactAppContextRef === reactContext) {
+      setReactContext(null)
+    }
+    super.invalidate()
+  }
+
+  companion object {
+    const val EVENT_NAME = "McAiPiPAction"
+
+    @Volatile
+    private var reactAppContextRef: ReactApplicationContext? = null
+
+    internal fun setReactContext(context: ReactApplicationContext?) {
+      reactAppContextRef = context
+    }
+
+    internal fun emitPiPAction(action: String) {
+      val ctx = reactAppContextRef ?: return
+      UiThreadUtil.runOnUiThread {
+        try {
+          ctx
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(EVENT_NAME, action)
+        } catch (_: Throwable) {
+        }
+      }
+    }
   }
 }

@@ -4,19 +4,20 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.app.Activity
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.UiThreadUtil
 import com.facebook.react.modules.core.DeviceEventManagerModule
 
-class McAiFloatingOverlayModule(
-  reactContext: ReactApplicationContext
-) : ReactContextBaseJavaModule(reactContext) {
+class McAiFloatingOverlayModule(private val reactContext: ReactApplicationContext) :
+  ReactContextBaseJavaModule(reactContext) {
 
   init {
-    reactContextRef = reactContext
+    setReactContext(reactContext)
   }
 
   override fun getName(): String = "McAiFloatingOverlay"
@@ -28,82 +29,124 @@ class McAiFloatingOverlayModule(
 
   @ReactMethod
   fun isPermissionGranted(promise: Promise) {
-    promise.resolve(Settings.canDrawOverlays(reactApplicationContext))
+    val granted = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+      true
+    } else {
+      Settings.canDrawOverlays(reactContext)
+    }
+    promise.resolve(granted)
   }
 
   @ReactMethod
   fun openPermissionSettings(promise: Promise) {
-    val activity = reactApplicationContext.currentActivity
-    if (activity == null) {
-      promise.reject("OVERLAY_NO_ACTIVITY", "Current activity is null")
-      return
-    }
     try {
-      val intent = Intent(
-        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-        Uri.parse("package:${reactApplicationContext.packageName}")
-      ).apply {
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val intent = Intent(
+          Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+          Uri.parse("package:${reactContext.packageName}")
+        ).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        reactContext.startActivity(intent)
       }
-      reactApplicationContext.startActivity(intent)
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("OVERLAY_OPEN_SETTINGS_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_OPEN_OVERLAY_SETTINGS", error.message, error)
     }
   }
 
   @ReactMethod
   fun startOverlay(uri: String, positionMs: Double, playWhenReady: Boolean, title: String?, promise: Promise) {
-    if (!Settings.canDrawOverlays(reactApplicationContext)) {
-      promise.reject("OVERLAY_PERMISSION_REQUIRED", "Draw over apps permission is required")
-      return
-    }
     try {
-      val intent = Intent(reactApplicationContext, FloatingPlayerService::class.java).apply {
-        action = FloatingOverlayController.ACTION_START
-        putExtra(FloatingOverlayController.EXTRA_URI, uri)
-        putExtra(FloatingOverlayController.EXTRA_POSITION_MS, positionMs.toLong())
-        putExtra(FloatingOverlayController.EXTRA_PLAY_WHEN_READY, playWhenReady)
-        putExtra(FloatingOverlayController.EXTRA_TITLE, title ?: "MC AI Player")
+      if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        promise.reject("E_UNSUPPORTED", "Overlay requires Android 8+")
+        return
       }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        reactApplicationContext.startForegroundService(intent)
-      } else {
-        reactApplicationContext.startService(intent)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(reactContext)) {
+        promise.reject("E_PERMISSION_DENIED", "Display over other apps permission is not granted")
+        return
       }
-      reactApplicationContext.currentActivity?.moveTaskToBack(true)
+      val intent = Intent(reactContext, McAiFloatingOverlayService::class.java).apply {
+        action = McAiFloatingOverlayService.ACTION_START
+        putExtra(McAiFloatingOverlayService.EXTRA_URI, uri)
+        putExtra(McAiFloatingOverlayService.EXTRA_POSITION_MS, positionMs.toLong())
+        putExtra(McAiFloatingOverlayService.EXTRA_PLAY_WHEN_READY, playWhenReady)
+        putExtra(McAiFloatingOverlayService.EXTRA_TITLE, title)
+      }
+      reactContext.startService(intent)
+      minimizeAppTask()
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("OVERLAY_START_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_START_OVERLAY", error.message, error)
     }
   }
 
   @ReactMethod
   fun stopOverlay(promise: Promise) {
     try {
-      val intent = Intent(reactApplicationContext, FloatingPlayerService::class.java).apply {
-        action = FloatingOverlayController.ACTION_STOP
+      val intent = Intent(reactContext, McAiFloatingOverlayService::class.java).apply {
+        action = McAiFloatingOverlayService.ACTION_STOP
       }
-      reactApplicationContext.startService(intent)
+      reactContext.startService(intent)
       promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("OVERLAY_STOP_FAILED", e.message, e)
+    } catch (error: Throwable) {
+      promise.reject("E_STOP_OVERLAY", error.message, error)
     }
   }
 
-  companion object {
-    private var reactContextRef: ReactApplicationContext? = null
+  private fun minimizeAppTask() {
+    UiThreadUtil.runOnUiThread {
+      try {
+        val activity = reactContext.currentActivity as? Activity
+        if (activity != null) {
+          activity.moveTaskToBack(true)
+          return@runOnUiThread
+        }
+        val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+          addCategory(Intent.CATEGORY_HOME)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        reactContext.startActivity(homeIntent)
+      } catch (_: Throwable) {
+      }
+    }
+  }
 
-    fun emitOverlayEvent(action: String, positionMs: Long) {
-      val reactContext = reactContextRef ?: return
-      if (!reactContext.hasActiveReactInstance()) return
+  override fun invalidate() {
+    if (reactAppContextRef === reactContext) {
+      setReactContext(null)
+    }
+    super.invalidate()
+  }
+
+  companion object {
+    const val EVENT_NAME = "McAiOverlayAction"
+    const val ACTION_EXPAND = "app.mcai.videoplayer.overlay.EXPAND"
+    const val ACTION_SETTINGS = "app.mcai.videoplayer.overlay.SETTINGS"
+    const val ACTION_CLOSE = "app.mcai.videoplayer.overlay.CLOSE"
+
+    @Volatile
+    private var reactAppContextRef: ReactApplicationContext? = null
+
+    internal fun setReactContext(context: ReactApplicationContext?) {
+      reactAppContextRef = context
+    }
+
+    internal fun emitOverlayAction(action: String, positionMs: Long, wasPlaying: Boolean) {
+      val ctx = reactAppContextRef ?: return
       val payload = Arguments.createMap().apply {
         putString("action", action)
         putDouble("positionMs", positionMs.toDouble())
+        putBoolean("wasPlaying", wasPlaying)
       }
-      reactContext
-        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit(FloatingOverlayController.EVENT_ACTION, payload)
+      UiThreadUtil.runOnUiThread {
+        try {
+          ctx
+            .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+            .emit(EVENT_NAME, payload)
+        } catch (_: Throwable) {
+        }
+      }
     }
   }
 }

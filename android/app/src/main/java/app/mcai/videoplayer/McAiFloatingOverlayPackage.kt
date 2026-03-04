@@ -14,4 +14,3 @@ class McAiFloatingOverlayPackage : ReactPackage {
     return emptyList()
   }
 }
-

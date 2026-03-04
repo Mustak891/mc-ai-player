@@ -114,6 +114,18 @@ const VideoCard = ({ video, onPress, resumePositionMillis = 0 }: VideoCardProps)
     );
 };
 
+const areVideoCardPropsEqual = (prev: VideoCardProps, next: VideoCardProps) => {
+    return (
+        prev.video.id === next.video.id &&
+        prev.video.uri === next.video.uri &&
+        prev.video.filename === next.video.filename &&
+        prev.video.duration === next.video.duration &&
+        prev.video.modificationTime === next.video.modificationTime &&
+        prev.resumePositionMillis === next.resumePositionMillis &&
+        prev.onPress === next.onPress
+    );
+};
+
 const useStyles = (colors: any) => StyleSheet.create({
     outer: {
         flex: 1,
@@ -235,4 +247,4 @@ const useStyles = (colors: any) => StyleSheet.create({
     },
 });
 
-export default VideoCard;
+export default React.memo(VideoCard, areVideoCardPropsEqual);

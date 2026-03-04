@@ -2,7 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 const RESUME_STORE_PATH = `${FileSystem.documentDirectory}resume-positions.json`;
 
-type ResumeStoreEntry = {
+export type ResumeStoreEntry = {
     positionMillis: number;
     updatedAt: number;
 };
@@ -45,6 +45,15 @@ export const readResumeStore = async (): Promise<Record<string, number>> => {
     const normalized: Record<string, number> = {};
     Object.keys(raw).forEach((uri) => {
         normalized[uri] = normalizeEntry(raw[uri]).positionMillis;
+    });
+    return normalized;
+};
+
+export const readResumeInfoStore = async (): Promise<Record<string, ResumeStoreEntry>> => {
+    const raw = await readResumeStoreRaw();
+    const normalized: Record<string, ResumeStoreEntry> = {};
+    Object.keys(raw).forEach((uri) => {
+        normalized[uri] = normalizeEntry(raw[uri]);
     });
     return normalized;
 };

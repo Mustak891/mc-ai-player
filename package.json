@@ -7,7 +7,10 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "postinstall": "node scripts/fix-async-storage.js"
+    "android:release:apk": "cd android && gradlew.bat :app:assembleRelease -x lint",
+    "android:release:aab": "cd android && gradlew.bat :app:bundleRelease -x lint",
+    "android:size": "powershell -ExecutionPolicy Bypass -File scripts/report-apk-size.ps1",
+    "postinstall": "node scripts/fix-async-storage.js && patch-package"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -23,21 +26,23 @@
     "expo-av": "~16.0.8",
     "expo-blur": "~15.0.8",
     "expo-brightness": "~14.0.8",
-    "expo-constants": "^55.0.7",
+    "expo-build-properties": "~1.0.10",
+    "expo-constants": "~18.0.13",
+    "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
+    "expo-font": "~14.0.11",
     "expo-image-manipulator": "~14.0.8",
     "expo-media-library": "~18.2.1",
+    "expo-navigation-bar": "~5.0.10",
     "expo-screen-orientation": "~9.0.8",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
     "expo-system-ui": "^6.0.9",
     "expo-video": "^3.0.16",
     "expo-video-thumbnails": "~10.0.8",
-    "jpeg-js": "^0.4.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
-    "react-native-fast-tflite": "^2.0.0",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-google-mobile-ads": "^16.0.3",
     "react-native-reanimated": "~4.1.1",
@@ -45,11 +50,12 @@
     "react-native-screens": "~4.16.0",
     "react-native-volume-manager": "^2.0.8",
     "react-native-web": "^0.21.0",
+    "react-native-worklets": "0.5.1",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
-    "@types/react-native": "^0.70.19",
+    "patch-package": "^8.0.1",
     "typescript": "~5.9.2"
   },
   "private": true
