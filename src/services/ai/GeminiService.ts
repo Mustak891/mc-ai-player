@@ -67,8 +67,17 @@ export class GeminiService implements IAIService {
         }
 
         if (!text?.trim()) {
-            if (lastModelError) throw lastModelError;
-            throw new Error('No compatible Gemini model responded to generateContent.');
+            let errorToThrow = lastModelError || new Error('No compatible Gemini model responded to generateContent.');
+            let errorMessage = (errorToThrow as any)?.message || String(errorToThrow);
+
+            if (errorMessage.includes('429') || errorMessage.toLowerCase().includes('quota') || errorMessage.toLowerCase().includes('rate limit')) {
+                errorMessage = 'The AI analyzer is currently busy due to high demand. Please try again in a moment.';
+            } else if (errorMessage.toLowerCase().includes('api key') || errorMessage.includes('403')) {
+                errorMessage = 'AI Analysis is currently unavailable. Please check your configuration.';
+            } else {
+                errorMessage = 'Something went wrong during the analysis. Please try again later.';
+            }
+            throw new Error(errorMessage);
         }
 
         return {
@@ -113,8 +122,20 @@ export class GeminiService implements IAIService {
             return await this.analyzeWithBase64(base64, timestamp, videoTitle);
         } catch (error: any) {
             console.error('Gemini API Error:', error);
-            const errorMessage = error?.message || String(error);
-            throw new Error(`AI Analysis failed: ${errorMessage}`);
+            let errorMessage = error?.message || String(error);
+
+            // Sanitize common API errors for the user
+            if (errorMessage.includes('429') || errorMessage.toLowerCase().includes('quota') || errorMessage.toLowerCase().includes('rate limit')) {
+                errorMessage = 'The AI analyzer is currently busy due to high demand. Please try again in a moment.';
+            } else if (errorMessage.toLowerCase().includes('api key') || errorMessage.includes('403')) {
+                errorMessage = 'AI Analysis is currently unavailable. Please check your configuration.';
+            } else if (errorMessage.toLowerCase().includes('network') || errorMessage.toLowerCase().includes('fetch')) {
+                errorMessage = 'A network error occurred. Please check your internet connection.';
+            } else {
+                errorMessage = 'Something went wrong during the analysis. Please try again later.';
+            }
+
+            throw new Error(errorMessage);
         }
     }
 }
