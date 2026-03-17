@@ -118,6 +118,17 @@ const USE_SYSTEM_PIP = pictureInPictureService.isNativeModuleAvailable();
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const subtitleFileNameRegex = /\.(srt|vtt)$/i;
 
+// Audio-only detection: matches all common audio file extensions.
+// Used to automatically switch the player into audio-only mode when
+// the file opened via intent is audio rather than video.
+const AUDIO_EXTENSIONS = /\.(mp3|aac|flac|ogg|m4a|wav|wma|opus|ape|amr)(\?.*)?$/i;
+const isAudioOnlyUri = (uri: string): boolean => {
+    // Strip query string / fragment before testing the extension.
+    const clean = uri.split('?')[0].split('#')[0];
+    const decoded = (() => { try { return decodeURIComponent(clean); } catch { return clean; } })();
+    return AUDIO_EXTENSIONS.test(decoded);
+};
+
 const toPersistedExternalSubtitles = (options: SubtitleOption[]): PersistedExternalSubtitle[] => {
     const seen = new Set<string>();
     const persisted: PersistedExternalSubtitle[] = [];
@@ -278,7 +289,7 @@ const PlayerScreen = () => {
     const [jumpToTimeVisible, setJumpToTimeVisible] = useState(false);
     const [jumpTargetMs, setJumpTargetMs] = useState(0);
     const [jumpInput, setJumpInput] = useState('');
-    const [audioOnlyMode, setAudioOnlyMode] = useState(false);
+    const [audioOnlyMode, setAudioOnlyMode] = useState(() => isAudioOnlyUri(videoUri));
     const [popUpMode, setPopUpMode] = useState(false);
     const [popupExpanded, setPopupExpanded] = useState(false);
     const [isPopUpWindowMounted, setIsPopUpWindowMounted] = useState(false);
@@ -479,6 +490,13 @@ const PlayerScreen = () => {
 
     useEffect(() => {
         activeVideoUriRef.current = videoUri;
+    }, [videoUri]);
+
+    // Automatically switch to audio-only mode when the opened URI is an audio file
+    // (e.g. opened via "Open with" from the file manager). This prevents the black
+    // screen that would otherwise appear because VideoView has no frame to render.
+    useEffect(() => {
+        setAudioOnlyMode(isAudioOnlyUri(videoUri));
     }, [videoUri]);
 
     // Pause the player when the screen loses focus (e.g. modal closes) to prevent
@@ -1837,36 +1855,39 @@ const PlayerScreen = () => {
         };
     }, []);
 
+    const analyzeLockRef = useRef(false);
     const handleAnalyzeScene = async () => {
-        if (!status.isLoaded || isAiAnalyzing || isAdPlaying) return;
-        const wasPlayingBeforeAnalyze = status.isPlaying;
-
-        // 1. Pause video immediately
-        if (wasPlayingBeforeAnalyze) {
-            player.pause();
-        }
-
-        // 2. Capture the current timestamp
-        const currentMillis = status.positionMillis || 0;
-
-        // 3. Pre-capture the video frame BEFORE the ad starts.
-        const preCapturedBase64 = await aiService.captureFrameBase64(videoUri, currentMillis);
-
-        setIsAdPlaying(true);
-        setIsAiAnalyzing(true); // Flag UI so if they check, it's already analyzing
-
-        // 4. Fire the Gemini API call IMMEDIATELY, but don't await it yet.
-        // It runs concurrently in the background while the user watches the ad.
-        let analysisPromise: Promise<Awaited<ReturnType<typeof aiService.analyze>>>;
-        if (preCapturedBase64) {
-            // Use the pre-captured frame — skips thumbnail extraction completely.
-            analysisPromise = aiService.analyzeWithBase64(preCapturedBase64, currentMillis, title);
-        } else {
-            // Fallback: service re-captures the frame (adds latency but is safe).
-            analysisPromise = aiService.analyze(currentMillis, title, videoUri);
-        }
-
+        if (!status.isLoaded || analyzeLockRef.current || isAiAnalyzing || isAdPlaying) return;
+        analyzeLockRef.current = true;
+        
         try {
+            const wasPlayingBeforeAnalyze = status.isPlaying;
+
+            // 1. Pause video immediately
+            if (wasPlayingBeforeAnalyze) {
+                player.pause();
+            }
+
+            // 2. Capture the current timestamp
+            const currentMillis = status.positionMillis || 0;
+
+            // 3. Pre-capture the video frame BEFORE the ad starts.
+            const preCapturedBase64 = await aiService.captureFrameBase64(videoUri, currentMillis);
+
+            setIsAdPlaying(true);
+            setIsAiAnalyzing(true); // Flag UI so if they check, it's already analyzing
+
+            // 4. Fire the Gemini API call IMMEDIATELY, but don't await it yet.
+            // It runs concurrently in the background while the user watches the ad.
+            let analysisPromise: Promise<Awaited<ReturnType<typeof aiService.analyze>>>;
+            if (preCapturedBase64) {
+                // Use the pre-captured frame — skips thumbnail extraction completely.
+                analysisPromise = aiService.analyzeWithBase64(preCapturedBase64, currentMillis, title);
+            } else {
+                // Fallback: service re-captures the frame (adds latency but is safe).
+                analysisPromise = aiService.analyze(currentMillis, title, videoUri);
+            }
+
             // 5. Show the ad. Await its completion.
             const earnedReward = await adMobService.showRewardedAd();
             setIsAdPlaying(false);
@@ -1895,13 +1916,15 @@ const PlayerScreen = () => {
             console.warn('AI Analysis or Ad failed:', error);
             setIsAdPlaying(false);
             setIsAiAnalyzing(false);
-            if (wasPlayingBeforeAnalyze) {
-                player.play();
-            }
+            // If try to play failed but video was playing, restart
+            try { player.play(); } catch {}
+            
             Alert.alert(
                 'AI Analysis Failed',
                 error?.message || 'Something went wrong during the analysis. Please try again later.'
             );
+        } finally {
+            analyzeLockRef.current = false;
         }
     };
 

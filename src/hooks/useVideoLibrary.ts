@@ -4,7 +4,7 @@ import { Alert, InteractionManager } from 'react-native';
 
 export const useVideoLibrary = (lazy: boolean = false) => {
     const [videos, setVideos] = useState<MediaLibrary.Asset[]>([]);
-    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions({ request: false });
     const [isLoading, setIsLoading] = useState(false);
     // Track whether a fetch is already in progress to prevent duplicate calls
     const fetchingRef = useRef(false);
@@ -18,13 +18,11 @@ export const useVideoLibrary = (lazy: boolean = false) => {
     const fetchVideos = async () => {
         if (fetchingRef.current) return;
         fetchingRef.current = true;
+        
+        // Don't auto-request here anymore; let the UI handle it gracefully
         if (!permissionResponse?.granted) {
-            const { granted } = await requestPermission();
-            if (!granted) {
-                Alert.alert('Permission needed', 'Please grant permission to access video files.');
-                fetchingRef.current = false;
-                return;
-            }
+            fetchingRef.current = false;
+            return;
         }
 
         setIsLoading(true);
@@ -60,5 +58,12 @@ export const useVideoLibrary = (lazy: boolean = false) => {
         };
     }, [permissionResponse, lazy]);
 
-    return { videos, isLoading, refetch: fetchVideos };
+    return { 
+        videos, 
+        isLoading, 
+        refetch: fetchVideos, 
+        hasPermission: permissionResponse?.granted ?? false,
+        canAskAgain: permissionResponse?.canAskAgain ?? true,
+        requestPermission 
+    };
 };

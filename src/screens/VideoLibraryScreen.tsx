@@ -9,6 +9,7 @@ import {
     TextInput,
     Keyboard,
     InteractionManager,
+    Linking,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -82,7 +83,7 @@ const VideoLibraryScreen = () => {
     // have fully settled. Avoids a re-render flash during the open/close transition.
     const [libraryReady, setLibraryReady] = useState(false);
 
-    const { videos, isLoading, refetch } = useVideoLibrary(!libraryReady);
+    const { videos, isLoading, refetch, hasPermission, canAskAgain, requestPermission } = useVideoLibrary(!libraryReady);
 
     const handleVideoPress = useCallback((video: MediaLibrary.Asset | { uri: string, filename: string }) => {
         const now = Date.now();
@@ -311,15 +312,42 @@ const VideoLibraryScreen = () => {
                 windowSize={7}
                 removeClippedSubviews
                 ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                        <Ionicons name="videocam-off-outline" size={64} color={colors.textMuted} />
-                        <Text style={styles.emptyTitle}>
-                            {isLoading ? 'Scanning Device' : 'No videos found'}
-                        </Text>
-                        <Text style={styles.emptySubtitle}>
-                            {isLoading ? 'Looking for video files...' : 'Videos from your device will appear here'}
-                        </Text>
-                    </View>
+                    !hasPermission ? (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="folder-open-outline" size={64} color={colors.primary} />
+                            <Text style={styles.emptyTitle}>Storage Access Required</Text>
+                            <Text style={styles.emptySubtitle}>
+                                MC AI Player needs permission to access and display the videos stored on your device.
+                            </Text>
+                            <TouchableOpacity 
+                                style={[styles.permissionButton, { backgroundColor: colors.primary }]}
+                                onPress={async () => {
+                                    if (canAskAgain) {
+                                        const res = await requestPermission();
+                                        if (res.granted) {
+                                            refetch();
+                                        }
+                                    } else {
+                                        Linking.openSettings();
+                                    }
+                                }}
+                            >
+                                <Text style={styles.permissionButtonText}>
+                                    {canAskAgain ? 'Grant Permission' : 'Open Settings'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <View style={styles.emptyState}>
+                            <Ionicons name="videocam-off-outline" size={64} color={colors.textMuted} />
+                            <Text style={styles.emptyTitle}>
+                                {isLoading ? 'Scanning Device' : 'No videos found'}
+                            </Text>
+                            <Text style={styles.emptySubtitle}>
+                                {isLoading ? 'Looking for video files...' : 'Videos from your device will appear here'}
+                            </Text>
+                        </View>
+                    )
                 }
             />
 
@@ -456,6 +484,23 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         fontSize: FONT_SIZE.s,
         textAlign: 'center',
         maxWidth: 260,
+    },
+    permissionButton: {
+        marginTop: SPACING.l,
+        paddingHorizontal: SPACING.xl,
+        paddingVertical: SPACING.m,
+        borderRadius: RADIUS.full,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 3,
+    },
+    permissionButtonText: {
+        color: '#FFFFFF',
+        fontSize: FONT_SIZE.m,
+        fontWeight: FONT_WEIGHT.bold,
+        letterSpacing: LETTER_SPACING.base,
     },
 });
 

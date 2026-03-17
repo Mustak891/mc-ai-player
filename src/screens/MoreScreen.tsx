@@ -87,9 +87,9 @@ const MoreScreen = () => {
                     />
                     <View style={styles.divider} />
                     <SettingRow
-                        icon="logo-github"
-                        label="View Source Code"
-                        onPress={() => Linking.openURL('https://github.com/Mustak891/mc-ai-player').catch(() => handlePlaceholder('Source code link'))}
+                        icon="person-circle-outline"
+                        label="Developer Profile"
+                        onPress={() => Linking.openURL('https://github.com/Mustak891').catch(() => handlePlaceholder('Developer Profile link'))}
                     />
                 </View>
 

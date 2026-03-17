@@ -32,6 +32,25 @@ module.exports = {
                 {
                     "androidAppId": process.env.ADMOB_ANDROID_APP_ID
                 }
+            ],
+            [
+                "expo-build-properties",
+                {
+                    "android": {
+                        "buildToolsVersion": "34.0.0",
+                        "newArchEnabled": false,
+                        "packagingOptions": {
+                            "pickFirsts": [
+                                "lib/x86/libc++_shared.so",
+                                "lib/x86_64/libjsc.so",
+                                "lib/arm64-v8a/libjsc.so",
+                                "lib/arm64-v8a/libc++_shared.so",
+                                "lib/x86_64/libc++_shared.so",
+                                "lib/armeabi-v7a/libc++_shared.so"
+                            ]
+                        }
+                    }
+                }
             ]
         ],
         "orientation": "default",
@@ -54,6 +73,18 @@ module.exports = {
             "predictiveBackGestureEnabled": false,
             "package": "app.mcai.videoplayer",
             "intentFilters": [
+                {
+                    "action": "VIEW",
+                    "autoVerify": true,
+                    "data": [
+                        { "mimeType": "audio/*" },
+                        { "mimeType": "audio/*", "scheme": "content" },
+                        { "mimeType": "audio/*", "scheme": "file" },
+                        { "mimeType": "audio/*", "scheme": "http" },
+                        { "mimeType": "audio/*", "scheme": "https" }
+                    ],
+                    "category": ["DEFAULT", "BROWSABLE"]
+                },
                 {
                     "action": "VIEW",
                     "autoVerify": true,
