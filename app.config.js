@@ -37,8 +37,7 @@ module.exports = {
                 "expo-build-properties",
                 {
                     "android": {
-                        "buildToolsVersion": "34.0.0",
-                        "newArchEnabled": false,
+                        "newArchEnabled": true,
                         "packagingOptions": {
                             "pickFirsts": [
                                 "lib/x86/libc++_shared.so",
