@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
+import { ThemePreference } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
@@ -10,7 +11,15 @@ import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../cons
 import { useThemeContext } from '../context/ThemeContext';
 
 const MoreScreen = () => {
-    const { colors, isDark } = useThemeContext();
+    const { colors, isDark, themePreference, setThemePreference } = useThemeContext();
+
+    const themeOptions: { label: string; value: ThemePreference }[] = [
+        { label: 'Light', value: 'light' },
+        { label: 'System', value: 'system' },
+        { label: 'Dark', value: 'dark' },
+    ];
+
+    const themeIcon = themePreference === 'dark' ? 'moon' : themePreference === 'light' ? 'sunny' : (isDark ? 'moon' : 'sunny');
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
     const styles = useStyles(colors, insets);
@@ -41,9 +50,32 @@ const MoreScreen = () => {
                 <Text style={styles.sectionTitle}>APPEARANCE</Text>
                 <View style={styles.card}>
                     <SettingRow
-                        icon={isDark ? "moon" : "sunny"}
-                        label="Dark Mode"
-                        rightElement={<Text style={styles.valueText}>{isDark ? 'On (System)' : 'Off (System)'}</Text>}
+                        icon={themeIcon}
+                        label="Appearance"
+                        rightElement={
+                            <View style={styles.segmentContainer}>
+                                {themeOptions.map((option, idx) => (
+                                    <TouchableOpacity
+                                        key={option.value}
+                                        style={[
+                                            styles.segmentOption,
+                                            themePreference === option.value && styles.segmentOptionActive,
+                                            idx === 0 && styles.segmentFirst,
+                                            idx === themeOptions.length - 1 && styles.segmentLast,
+                                        ]}
+                                        onPress={() => setThemePreference(option.value)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[
+                                            styles.segmentText,
+                                            themePreference === option.value && styles.segmentTextActive,
+                                        ]}>
+                                            {option.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        }
                     />
                     <View style={styles.divider} />
                     <SettingRow
@@ -194,6 +226,39 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         color: colors.textMuted,
         fontSize: FONT_SIZE.xs,
         marginTop: 4,
+    },
+    segmentContainer: {
+        flexDirection: 'row',
+        borderRadius: RADIUS.s,
+        borderWidth: 1,
+        borderColor: colors.borderSubtle,
+        overflow: 'hidden',
+        backgroundColor: colors.background,
+    },
+    segmentOption: {
+        paddingVertical: 5,
+        paddingHorizontal: 10,
+        backgroundColor: 'transparent',
+    },
+    segmentOptionActive: {
+        backgroundColor: colors.primary,
+    },
+    segmentFirst: {
+        borderTopLeftRadius: RADIUS.s,
+        borderBottomLeftRadius: RADIUS.s,
+    },
+    segmentLast: {
+        borderTopRightRadius: RADIUS.s,
+        borderBottomRightRadius: RADIUS.s,
+    },
+    segmentText: {
+        fontSize: FONT_SIZE.xs,
+        fontWeight: FONT_WEIGHT.medium,
+        color: colors.textSecondary,
+    },
+    segmentTextActive: {
+        color: colors.white,
+        fontWeight: FONT_WEIGHT.bold,
     }
 });
 
