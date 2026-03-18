@@ -2,7 +2,55 @@ const {
     withAppBuildGradle,
     withProjectBuildGradle,
     withSettingsGradle,
+    withAndroidManifest,
 } = require('@expo/config-plugins');
+
+/**
+ * Injects an audio/* VIEW intent-filter into MainActivity,
+ * identical in structure to the video/* filter that expo-video injects.
+ * This survives every `expo prebuild` so manual AndroidManifest.xml edits are not needed.
+ */
+function addAudioIntentFilter(config) {
+    return withAndroidManifest(config, (config) => {
+        const manifest = config.modResults;
+        const application = manifest.manifest.application?.[0];
+        if (!application) return config;
+
+        const mainActivity = application.activity?.find(
+            (a) => a.$?.['android:name'] === '.MainActivity'
+        );
+        if (!mainActivity) return config;
+
+        // Check if audio filter already exists to avoid duplicates
+        const alreadyHasAudio = mainActivity['intent-filter']?.some((filter) =>
+            filter.data?.some((d) => d.$?.['android:mimeType'] === 'audio/*')
+        );
+        if (alreadyHasAudio) return config;
+
+        const audioFilter = {
+            $: {},
+            action: [{ $: { 'android:name': 'android.intent.action.VIEW' } }],
+            category: [
+                { $: { 'android:name': 'android.intent.category.DEFAULT' } },
+                { $: { 'android:name': 'android.intent.category.BROWSABLE' } },
+            ],
+            data: [
+                { $: { 'android:mimeType': 'audio/*' } },
+                { $: { 'android:mimeType': 'audio/*', 'android:scheme': 'content' } },
+                { $: { 'android:mimeType': 'audio/*', 'android:scheme': 'file' } },
+                { $: { 'android:mimeType': 'audio/*', 'android:scheme': 'http' } },
+                { $: { 'android:mimeType': 'audio/*', 'android:scheme': 'https' } },
+            ],
+        };
+
+        mainActivity['intent-filter'] = [
+            ...(mainActivity['intent-filter'] || []),
+            audioFilter,
+        ];
+
+        return config;
+    });
+}
 
 module.exports = function withFFmpegExoPlayer(config) {
     config = withAppBuildGradle(config, (config) => {
@@ -51,6 +99,9 @@ module.exports = function withFFmpegExoPlayer(config) {
         config.modResults.contents = `${settingsGradle.trimEnd()}\n${localProjectBlock}`;
         return config;
     });
+
+    // Inject audio/* intent filter so the app appears in "Open with" for audio files.
+    config = addAudioIntentFilter(config);
 
     return config;
 };

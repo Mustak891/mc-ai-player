@@ -20,6 +20,7 @@ allprojects {
   }
 }
 
+
 subprojects {
   configurations.configureEach {
     resolutionStrategy.dependencySubstitution {
