@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const isProdBuild = process.env.EAS_BUILD_PROFILE === 'production' || process.env.NODE_ENV === 'production';
+const isProdBuild = process.env.EAS_BUILD_PROFILE === 'production';
 const isTestAdMobId = (value) => typeof value === 'string' && value.includes('ca-app-pub-3940256099942544');
 
 if (!process.env.GEMINI_API_KEY) {
@@ -100,6 +100,9 @@ module.exports = {
             "favicon": "./assets/favicon.png"
         },
         "extra": {
+            "eas": {
+                "projectId": "f6010e19-92d1-4d38-9a94-6f5bbcbafcb0"
+            },
             "geminiApiKey": process.env.GEMINI_API_KEY,
             "admobRewardedUnitId": process.env.ADMOB_REWARDED_AD_UNIT_ID
         }
