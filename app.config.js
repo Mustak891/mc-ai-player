@@ -54,7 +54,7 @@ module.exports = {
         ],
         "orientation": "default",
         "icon": "./assets/icon.png",
-        "userInterfaceStyle": "light",
+        "userInterfaceStyle": "automatic",
         "splash": {
             "image": "./assets/transparent.png",
             "resizeMode": "contain",

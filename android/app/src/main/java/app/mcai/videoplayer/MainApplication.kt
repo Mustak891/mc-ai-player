@@ -24,7 +24,9 @@ class MainApplication : Application(), ReactApplication {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
-              // add(MyReactNativePackage())
+              add(app.mcai.videoplayer.McAiPictureInPicturePackage())
+              add(app.mcai.videoplayer.McAiEqualizerPackage())
+              add(app.mcai.videoplayer.McAiFloatingOverlayPackage())
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
