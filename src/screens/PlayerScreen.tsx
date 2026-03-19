@@ -35,6 +35,7 @@ import AIOverlay from '../components/AIOverlay';
 import ControlSettingsPanel from '../components/player/ControlSettingsPanel';
 import EqualizerPanel from '../components/player/EqualizerPanel';
 import VideoTipsModal from '../components/player/VideoTipsModal';
+import PlayerOnboardingOverlay from '../components/onboarding/PlayerOnboardingOverlay';
 import { useThemeContext } from '../context/ThemeContext';
 import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../constants/theme';
 import { RootStackParamList } from '../navigation/types';

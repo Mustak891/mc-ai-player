@@ -10,6 +10,7 @@ import TermsAndConditionsScreen from '../screens/TermsAndConditionsScreen';
 import { RootStackParamList } from './types';
 import PrivacyPolicyScreen from '../screens/PrivacyPolicyScreen';
 import { useThemeContext } from '../context/ThemeContext';
+import AppOnboardingOverlay from '../components/onboarding/AppOnboardingOverlay';
 
 const Stack = createStackNavigator<RootStackParamList>();
 const INTENT_DEDUP_WINDOW_MS = 1200;
@@ -115,41 +116,44 @@ const AppNavigator = () => {
     };
 
     return (
-        <NavigationContainer
-            ref={navigationRef}
-            theme={AppTheme}
-            initialState={initialState as any}
-            onReady={() => {
-                const pendingUrl = pendingIntentUrlRef.current;
-                if (!pendingUrl) return;
-                pendingIntentUrlRef.current = null;
-                navigateToExternalVideo(pendingUrl);
-            }}
-        >
-            <StatusBar style={isDark ? "light" : "dark"} translucent={true} backgroundColor="transparent" />
-            <Stack.Navigator
-                screenOptions={{
-                    headerShown: false,
-                    cardStyle: { backgroundColor: colors.background },
+        <>
+            <NavigationContainer
+                ref={navigationRef}
+                theme={AppTheme}
+                initialState={initialState as any}
+                onReady={() => {
+                    const pendingUrl = pendingIntentUrlRef.current;
+                    if (!pendingUrl) return;
+                    pendingIntentUrlRef.current = null;
+                    navigateToExternalVideo(pendingUrl);
                 }}
             >
-                <Stack.Screen name="Main" component={BottomTabNavigator} />
-                <Stack.Screen
-                    name="Player"
-                    component={PlayerScreen}
-                    options={{
-                        presentation: 'card',
-                        gestureEnabled: false,
-                        detachPreviousScreen: false,
-                        cardStyle: { backgroundColor: '#000' },
-                        animation: 'none',
-                        cardStyleInterpolator: CardStyleInterpolators.forNoAnimation,
+                <StatusBar style={isDark ? "light" : "dark"} translucent={true} backgroundColor="transparent" />
+                <Stack.Navigator
+                    screenOptions={{
+                        headerShown: false,
+                        cardStyle: { backgroundColor: colors.background },
                     }}
-                />
-                <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
-                <Stack.Screen name="TermsAndConditions" component={TermsAndConditionsScreen} />
-            </Stack.Navigator>
-        </NavigationContainer>
+                >
+                    <Stack.Screen name="Main" component={BottomTabNavigator} />
+                    <Stack.Screen
+                        name="Player"
+                        component={PlayerScreen}
+                        options={{
+                            presentation: 'card',
+                            gestureEnabled: false,
+                            detachPreviousScreen: false,
+                            cardStyle: { backgroundColor: '#000' },
+                            animation: 'none',
+                            cardStyleInterpolator: CardStyleInterpolators.forNoAnimation,
+                        }}
+                    />
+                    <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+                    <Stack.Screen name="TermsAndConditions" component={TermsAndConditionsScreen} />
+                </Stack.Navigator>
+            </NavigationContainer>
+            <AppOnboardingOverlay />
+        </>
     );
 };
 

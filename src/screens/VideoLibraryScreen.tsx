@@ -500,7 +500,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         color: '#FFFFFF',
         fontSize: FONT_SIZE.m,
         fontWeight: FONT_WEIGHT.bold,
-        letterSpacing: LETTER_SPACING.base,
+        letterSpacing: LETTER_SPACING.normal,
     },
 });
 
