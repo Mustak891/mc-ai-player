@@ -74,7 +74,6 @@ module.exports = {
             "intentFilters": [
                 {
                     "action": "VIEW",
-                    "autoVerify": true,
                     "data": [
                         { "mimeType": "audio/*" },
                         { "mimeType": "audio/*", "scheme": "content" },
@@ -86,7 +85,6 @@ module.exports = {
                 },
                 {
                     "action": "VIEW",
-                    "autoVerify": true,
                     "data": [
                         { "mimeType": "video/*" },
                         { "mimeType": "video/*", "scheme": "content" },
