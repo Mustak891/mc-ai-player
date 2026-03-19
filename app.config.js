@@ -100,9 +100,6 @@ module.exports = {
             "favicon": "./assets/favicon.png"
         },
         "extra": {
-            "eas": {
-                "projectId": "23d8d675-cd3e-4007-89d4-e5e4847fc447"
-            },
             "geminiApiKey": process.env.GEMINI_API_KEY,
             "admobRewardedUnitId": process.env.ADMOB_REWARDED_AD_UNIT_ID
         }
