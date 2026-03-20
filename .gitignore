@@ -12,6 +12,7 @@ expo-env.d.ts
 # Native
 .kotlin/
 .gradle/
+.gradle-user/
 android/.gradle/
 android/build/
 android/app/build/
@@ -46,3 +47,4 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 temp_nextlib/
+temp_config*.json

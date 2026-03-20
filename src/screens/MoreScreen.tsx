@@ -11,7 +11,14 @@ import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../cons
 import { useThemeContext } from '../context/ThemeContext';
 
 const MoreScreen = () => {
-    const { colors, isDark, themePreference, setThemePreference } = useThemeContext();
+    const {
+        colors,
+        resolvedTheme,
+        systemTheme,
+        themePreference,
+        isSystemThemeSelected,
+        setThemePreference,
+    } = useThemeContext();
 
     const themeOptions: { label: string; value: ThemePreference }[] = [
         { label: 'Light', value: 'light' },
@@ -19,7 +26,11 @@ const MoreScreen = () => {
         { label: 'Dark', value: 'dark' },
     ];
 
-    const themeIcon = themePreference === 'dark' ? 'moon' : themePreference === 'light' ? 'sunny' : (isDark ? 'moon' : 'sunny');
+    const themeIcon = resolvedTheme === 'dark' ? 'moon' : 'sunny';
+    const activeThemeOption = themePreference === 'system' ? resolvedTheme : themePreference;
+    const themeStatusText = isSystemThemeSelected
+        ? `System selected • Following ${systemTheme === 'dark' ? 'Dark' : 'Light'}`
+        : `Using ${resolvedTheme === 'dark' ? 'Dark' : 'Light'} mode`;
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
     const styles = useStyles(colors, insets);
@@ -46,34 +57,40 @@ const MoreScreen = () => {
             </View>
 
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-                {/* Visual Settings Section */}
                 <Text style={styles.sectionTitle}>APPEARANCE</Text>
                 <View style={styles.card}>
                     <SettingRow
                         icon={themeIcon}
                         label="Appearance"
                         rightElement={
-                            <View style={styles.segmentContainer}>
-                                {themeOptions.map((option, idx) => (
-                                    <TouchableOpacity
-                                        key={option.value}
-                                        style={[
-                                            styles.segmentOption,
-                                            themePreference === option.value && styles.segmentOptionActive,
-                                            idx === 0 && styles.segmentFirst,
-                                            idx === themeOptions.length - 1 && styles.segmentLast,
-                                        ]}
-                                        onPress={() => setThemePreference(option.value)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={[
-                                            styles.segmentText,
-                                            themePreference === option.value && styles.segmentTextActive,
-                                        ]}>
-                                            {option.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
+                            <View style={styles.themeControl}>
+                                <View style={styles.segmentContainer}>
+                                    {themeOptions.map((option, idx) => {
+                                        const isActive = option.value === activeThemeOption;
+
+                                        return (
+                                            <TouchableOpacity
+                                                key={option.value}
+                                                style={[
+                                                    styles.segmentOption,
+                                                    isActive && styles.segmentOptionActive,
+                                                    idx === 0 && styles.segmentFirst,
+                                                    idx === themeOptions.length - 1 && styles.segmentLast,
+                                                ]}
+                                                onPress={() => setThemePreference(option.value)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <Text style={[
+                                                    styles.segmentText,
+                                                    isActive && styles.segmentTextActive,
+                                                ]}>
+                                                    {option.label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </View>
+                                <Text style={styles.themeStatusText}>{themeStatusText}</Text>
                             </View>
                         }
                     />
@@ -86,7 +103,6 @@ const MoreScreen = () => {
                     />
                 </View>
 
-                {/* About Section */}
                 <Text style={styles.sectionTitle}>ABOUT</Text>
                 <View style={styles.card}>
                     <SettingRow
@@ -109,7 +125,6 @@ const MoreScreen = () => {
                     />
                 </View>
 
-                {/* Social Section */}
                 <Text style={styles.sectionTitle}>CONNECT</Text>
                 <View style={styles.card}>
                     <SettingRow
@@ -125,7 +140,6 @@ const MoreScreen = () => {
                     />
                 </View>
 
-                {/* Footer Brand */}
                 <View style={styles.footerBrand}>
                     <Ionicons name="play-circle" size={48} color={colors.border} />
                     <Text style={styles.brandName}>MC AI PLAYER</Text>
@@ -206,7 +220,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
     divider: {
         height: 1,
         backgroundColor: colors.borderSubtle,
-        marginLeft: 54, // Align with text start
+        marginLeft: 54,
     },
     footerBrand: {
         alignItems: 'center',
@@ -226,6 +240,15 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         color: colors.textMuted,
         fontSize: FONT_SIZE.xs,
         marginTop: 4,
+    },
+    themeControl: {
+        alignItems: 'flex-end',
+    },
+    themeStatusText: {
+        marginTop: 6,
+        color: colors.textMuted,
+        fontSize: FONT_SIZE.xxs,
+        fontWeight: FONT_WEIGHT.medium,
     },
     segmentContainer: {
         flexDirection: 'row',
@@ -259,7 +282,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
     segmentTextActive: {
         color: colors.white,
         fontWeight: FONT_WEIGHT.bold,
-    }
+    },
 });
 
 export default MoreScreen;

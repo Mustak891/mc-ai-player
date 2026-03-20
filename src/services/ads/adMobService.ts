@@ -1,14 +1,14 @@
-import mobileAds, { RewardedAd, TestIds, RewardedAdEventType, AdEventType } from 'react-native-google-mobile-ads';
-import { ADMOB_REWARDED_AD_UNIT_ID } from '../../constants/keys';
+import mobileAds, { RewardedInterstitialAd, TestIds, RewardedAdEventType, AdEventType } from 'react-native-google-mobile-ads';
+import { ADMOB_REWARDED_INTERSTITIAL_UNIT_ID } from '../../constants/keys';
 
 class AdMobService {
     private isInitialized = false;
-    private rewardedAd: RewardedAd | null = null;
+    private rewardedAd: RewardedInterstitialAd | null = null;
     private rewardedAdLoaded = false;
 
     // Use the official Google Mobile Ads Test ID for development to prevent accidental policy violations.
-    // Before publishing, you can swap this with ADMOB_REWARDED_AD_UNIT_ID from keys.ts if testing is finished.
-    private adUnitId = __DEV__ ? TestIds.REWARDED : ADMOB_REWARDED_AD_UNIT_ID;
+    // Before publishing, you can swap this with ADMOB_REWARDED_INTERSTITIAL_UNIT_ID from keys.ts if testing is finished.
+    private adUnitId = __DEV__ ? TestIds.REWARDED_INTERSTITIAL : ADMOB_REWARDED_INTERSTITIAL_UNIT_ID;
 
     constructor() {
         void this.initialize();
@@ -28,7 +28,7 @@ class AdMobService {
     private preloadRewardedAd() {
         if (!this.isInitialized || !this.adUnitId) return;
 
-        const ad = RewardedAd.createForAdRequest(this.adUnitId, {
+        const ad = RewardedInterstitialAd.createForAdRequest(this.adUnitId, {
             requestNonPersonalizedAdsOnly: true,
         });
         this.rewardedAd = ad;
@@ -138,6 +138,8 @@ class AdMobService {
             const unsubscribeClosed = ad.addAdEventListener(
                 AdEventType.CLOSED,
                 () => {
+                    // Only return true if they explicitly earned the reward before closing.
+                    // This creates the strict "must watch full ad" enforcement.
                     handleCompletion(userEarnedReward);
                 }
             );

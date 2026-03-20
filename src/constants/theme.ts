@@ -47,7 +47,7 @@ export const LIGHT_COLORS: typeof DARK_COLORS = {
   primarySubtle: 'rgba(255, 122, 0, 0.08)',
 
   // Backgrounds – three tiers
-  background: '#F5F5F7',   // clean light gray/white
+  background: '#FFFFFF',   // pure white app background
   surface: '#FFFFFF',   // bright card bg
   surfaceHigh: '#FFFFFF',   // elevated card / panel (relies on shadow in light mode)
   surfaceGlass: 'rgba(255, 255, 255, 0.85)',  // light frosted glass
@@ -171,3 +171,4 @@ export const SHADOW = {
     default: {},
   }),
 };
+

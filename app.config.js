@@ -15,7 +15,10 @@ if (isProdBuild) {
     if (!process.env.ADMOB_REWARDED_AD_UNIT_ID) {
         throw new Error('ADMOB_REWARDED_AD_UNIT_ID is required for production builds.');
     }
-    if (isTestAdMobId(process.env.ADMOB_ANDROID_APP_ID) || isTestAdMobId(process.env.ADMOB_REWARDED_AD_UNIT_ID)) {
+    if (!process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID) {
+        throw new Error('ADMOB_REWARDED_INTERSTITIAL_UNIT_ID is required for production builds.');
+    }
+    if (isTestAdMobId(process.env.ADMOB_ANDROID_APP_ID) || isTestAdMobId(process.env.ADMOB_REWARDED_AD_UNIT_ID) || isTestAdMobId(process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID)) {
         throw new Error('Production build is using AdMob test IDs. Replace with live AdMob IDs.');
     }
 }
@@ -104,7 +107,8 @@ module.exports = {
                 "projectId": "f6010e19-92d1-4d38-9a94-6f5bbcbafcb0"
             },
             "geminiApiKey": process.env.GEMINI_API_KEY,
-            "admobRewardedUnitId": process.env.ADMOB_REWARDED_AD_UNIT_ID
+            "admobRewardedUnitId": process.env.ADMOB_REWARDED_AD_UNIT_ID,
+            "admobRewardedInterstitialUnitId": process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID
         }
     }
 };

@@ -57,14 +57,21 @@ module.exports = function withFFmpegExoPlayer(config) {
         const buildGradle = config.modResults.contents;
 
         // We use Anil Beesetti's NextLib Media3 extension because it reliably builds the Dolby EAC3 and AC3 FFmpeg codecs natively.
-        let updatedContents = buildGradle.replace(
-            /dependencies\s*\{/,
-            `dependencies {\n    // Added by withFFmpegExoPlayer Config Plugin (NextLib FFmpeg Decoder for Dolby EAC3)\n    implementation("io.github.anilbeesetti:nextlib-media3ext:1.8.0-0.9.0") { \n        exclude group: 'androidx.media3' // prevent version collisions with expo-video\n    }\n`
-        );
+        // We also explicitly include Media3 dependencies so they are visible to the main app's Kotlin source.
+        const media3Version = "1.3.1";
+        const dependencyBlock = `    // Added by withFFmpegExoPlayer Config Plugin\n    implementation("androidx.media3:media3-exoplayer:${media3Version}")\n    implementation("androidx.media3:media3-ui:${media3Version}")\n    implementation("androidx.media3:media3-session:${media3Version}")\n    implementation("androidx.media3:media3-common:${media3Version}")\n    implementation("io.github.anilbeesetti:nextlib-media3ext:${media3Version}-0.9.0") { \n        exclude group: 'androidx.media3' // prevent version collisions with expo-video\n    }\n`;
+        const hasInjectedMedia3Deps =
+            buildGradle.includes(`implementation("androidx.media3:media3-exoplayer:${media3Version}")`) &&
+            buildGradle.includes(`implementation("io.github.anilbeesetti:nextlib-media3ext:${media3Version}-0.9.0")`);
+
+        let updatedContents = hasInjectedMedia3Deps
+            ? buildGradle
+            : buildGradle.replace(/dependencies\s*\{/, `dependencies {\n${dependencyBlock}`);
 
         // Apply the ABI filter to aggressively trim application size down to 50MB
         const defaultConfigMatch = /defaultConfig\s*\{/;
-        if (updatedContents.match(defaultConfigMatch)) {
+        const hasArm64OnlyFilter = /ndk\s*\{\s*abiFilters\s+"arm64-v8a"\s*\}/m.test(updatedContents);
+        if (!hasArm64OnlyFilter && updatedContents.match(defaultConfigMatch)) {
             updatedContents = updatedContents.replace(
                 defaultConfigMatch,
                 `defaultConfig {\n        // Keep APK < 50MB by only compiling for arm64\n        ndk {\n            abiFilters "arm64-v8a"\n        }\n`

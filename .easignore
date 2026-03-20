@@ -22,6 +22,7 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 .DS_Store
+temp_config*.json
 
 # Secrets and local env files
 .env
