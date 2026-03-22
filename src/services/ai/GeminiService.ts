@@ -3,7 +3,7 @@ import * as VideoThumbnails from 'expo-video-thumbnails';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { IAIService, AnalysisResult } from './types';
-import { GEMINI_API_KEY } from '../../constants/keys';
+import { GEMINI_API_KEY, AI_BACKEND_URL } from '../../constants/keys';
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const MODEL_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'] as const;
@@ -40,8 +40,31 @@ export class GeminiService implements IAIService {
         timestamp: number,
         videoTitle?: string
     ): Promise<AnalysisResult> {
+        // Backend URL strategy: If configured, route to secure server
+        if (AI_BACKEND_URL) {
+            try {
+                const endpoint = AI_BACKEND_URL + (AI_BACKEND_URL.endsWith('/') ? '' : '/') + 'api/analyze-frame';
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ base64, timestamp, videoTitle })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `Server error: ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error: any) {
+                console.error("Backend AI Request Failed:", error);
+                throw new Error(error.message || "Failed to reach the AI analysis server.");
+            }
+        }
+
+        // Local Fallback Strategy (Direct SDK Usage)
         if (!GEMINI_API_KEY) {
-            throw new Error('AI Analysis is currently unavailable because the API key is not configured.');
+            throw new Error('AI Analysis is currently unavailable. Ensure AI_BACKEND_URL or GEMINI_API_KEY is configured.');
         }
 
         const prompt = `You are analyzing a frame from a video${videoTitle ? ` titled "${videoTitle}"` : ''}. In one sentence, describe what is on screen right now. Be direct and specific.`;

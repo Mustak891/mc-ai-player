@@ -101,10 +101,10 @@ class AdMobService {
         const ready = await this.waitForRewardedAdLoad();
         if (!ready || !this.rewardedAd) {
             this.preloadRewardedAd();
-            return false;
+            throw new Error("No Internet Connection: Please check your network to load the ad and use the AI.");
         }
 
-        return new Promise((resolve) => {
+        return new Promise((resolve, reject) => {
             const ad = this.rewardedAd!;
 
             let userEarnedReward = false;
@@ -147,7 +147,13 @@ class AdMobService {
             const unsubscribeError = ad.addAdEventListener(
                 AdEventType.ERROR,
                 () => {
-                    handleCompletion(false);
+                    if (dismissHandled) return;
+                    dismissHandled = true;
+                    unsubscribeEarned();
+                    unsubscribeClosed();
+                    unsubscribeError();
+                    this.preloadRewardedAd();
+                    reject(new Error("No Internet Connection: Please check your network to load the ad and use the AI."));
                 }
             );
 
@@ -155,7 +161,13 @@ class AdMobService {
                 this.rewardedAdLoaded = false;
                 ad.show();
             } catch {
-                handleCompletion(false);
+                if (dismissHandled) return;
+                dismissHandled = true;
+                unsubscribeEarned();
+                unsubscribeClosed();
+                unsubscribeError();
+                this.preloadRewardedAd();
+                reject(new Error("An unexpected error occurred while showing the ad."));
             }
         });
     }

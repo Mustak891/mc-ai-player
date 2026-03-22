@@ -1860,7 +1860,7 @@ const PlayerScreen = () => {
     const handleAnalyzeScene = async () => {
         if (!status.isLoaded || analyzeLockRef.current || isAiAnalyzing || isAdPlaying) return;
         analyzeLockRef.current = true;
-        
+
         try {
             const wasPlayingBeforeAnalyze = status.isPlaying;
 
@@ -1878,28 +1878,17 @@ const PlayerScreen = () => {
             setIsAdPlaying(true);
             setIsAiAnalyzing(true); // Flag UI so if they check, it's already analyzing
 
-            // 4. Fire the Gemini API call IMMEDIATELY, but don't await it yet.
-            // It runs concurrently in the background while the user watches the ad.
-            let analysisPromise: Promise<Awaited<ReturnType<typeof aiService.analyze>>>;
-            if (preCapturedBase64) {
-                // Use the pre-captured frame — skips thumbnail extraction completely.
-                analysisPromise = aiService.analyzeWithBase64(preCapturedBase64, currentMillis, title);
-            } else {
-                // Fallback: service re-captures the frame (adds latency but is safe).
-                analysisPromise = aiService.analyze(currentMillis, title, videoUri);
-            }
-
-            // 5. Show the ad. Await its completion.
+            // 4. Show the ad. Await its completion.
             const earnedReward = await adMobService.showRewardedAd();
             setIsAdPlaying(false);
 
             if (!earnedReward) {
-                // User skipped the ad. Discard the API call.
+                // User skipped the ad. Do NOT fire the API call.
                 setIsAiAnalyzing(false);
-                flashSeekFeedback('Watch full ad to unlock AI');
+                flashSeekFeedback('Watch full ad to unlock AI Analysis');
                 Alert.alert(
                     'Ad Required',
-                    'Please watch the full rewarded ad to get AI analysis.'
+                    'Please watch the full rewarded ad to get AI Analysis.'
                 );
                 if (wasPlayingBeforeAnalyze) {
                     player.play();
@@ -1907,8 +1896,15 @@ const PlayerScreen = () => {
                 return;
             }
 
-            // 6. User finished the ad. Because the API was running in the background for
-            // 5-15 seconds, this await resolves almost instantly — effectively zero delay!
+            // 5. User finished the ad. NOW fire the Gemini API call.
+            // This prevents charging your Gemini API quota for people who skip the ad!
+            let analysisPromise: Promise<Awaited<ReturnType<typeof aiService.analyze>>>;
+            if (preCapturedBase64) {
+                analysisPromise = aiService.analyzeWithBase64(preCapturedBase64, currentMillis, title);
+            } else {
+                analysisPromise = aiService.analyze(currentMillis, title, videoUri);
+            }
+
             const result = await analysisPromise;
             setIsAiAnalyzing(false);
             setDetections(result.detections);
@@ -1918,8 +1914,8 @@ const PlayerScreen = () => {
             setIsAdPlaying(false);
             setIsAiAnalyzing(false);
             // If try to play failed but video was playing, restart
-            try { player.play(); } catch {}
-            
+            try { player.play(); } catch { }
+
             Alert.alert(
                 'AI Analysis Failed',
                 error?.message || 'Something went wrong during the analysis. Please try again later.'

@@ -7,5 +7,5 @@ const extra =
     {};
 
 export const GEMINI_API_KEY = (extra.geminiApiKey as string) ?? '';
-export const ADMOB_REWARDED_AD_UNIT_ID = (extra.admobRewardedUnitId as string) ?? '';
+export const AI_BACKEND_URL = (extra.aiBackendUrl as string) ?? '';
 export const ADMOB_REWARDED_INTERSTITIAL_UNIT_ID = (extra.admobRewardedInterstitialUnitId as string) ?? '';
