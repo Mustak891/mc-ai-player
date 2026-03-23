@@ -83,7 +83,7 @@ const VideoLibraryScreen = () => {
     // have fully settled. Avoids a re-render flash during the open/close transition.
     const [libraryReady, setLibraryReady] = useState(false);
 
-    const { videos, isLoading, refetch, hasPermission, canAskAgain, requestPermission } = useVideoLibrary(!libraryReady);
+    const { videos, isLoading, refetch, hasPermission, canAskAgain, isPermissionLoading, requestPermission } = useVideoLibrary(!libraryReady);
 
     const handleVideoPress = useCallback((video: MediaLibrary.Asset | { uri: string, filename: string }) => {
         const now = Date.now();
@@ -312,6 +312,9 @@ const VideoLibraryScreen = () => {
                 windowSize={7}
                 removeClippedSubviews
                 ListEmptyComponent={
+                    // While the OS hasn't returned a permission status yet, show nothing
+                    // to avoid flashing "Open Settings" before the native dialog appears.
+                    isPermissionLoading ? null :
                     !hasPermission ? (
                         <View style={styles.emptyState}>
                             <Ionicons name="folder-open-outline" size={64} color={colors.primary} />
@@ -319,7 +322,7 @@ const VideoLibraryScreen = () => {
                             <Text style={styles.emptySubtitle}>
                                 MC AI Player needs permission to access and display the videos stored on your device.
                             </Text>
-                            <TouchableOpacity 
+                            <TouchableOpacity
                                 style={[styles.permissionButton, { backgroundColor: colors.primary }]}
                                 onPress={async () => {
                                     if (canAskAgain) {
@@ -348,8 +351,7 @@ const VideoLibraryScreen = () => {
                             </Text>
                         </View>
                     )
-                }
-            />
+                }            />
 
             <DisplaySettingsModal
                 visible={isSettingsModalVisible}

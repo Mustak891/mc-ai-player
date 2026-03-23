@@ -3,6 +3,7 @@ import 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { View } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
+import * as NavigationBar from 'expo-navigation-bar';
 import AppNavigator from './src/navigation/AppNavigator';
 import { ThemeProvider, useThemeContext } from './src/context/ThemeContext';
 
@@ -13,13 +14,21 @@ import * as SplashScreen from 'expo-splash-screen';
 SplashScreen.preventAutoHideAsync();
 
 const ThemedAppShell: React.FC<{ fontsLoaded: boolean }> = ({ fontsLoaded }) => {
-  const { colors, isThemeReady } = useThemeContext();
+  const { colors, isThemeReady, isDark } = useThemeContext();
 
   React.useEffect(() => {
+    // Update the app background (splash area behind the React Native view)
     SystemUI.setBackgroundColorAsync(colors.background).catch((error) => {
       console.warn(error);
     });
-  }, [colors.background]);
+    // Update the Android system navigation bar (Back/Home/Recents button bar)
+    NavigationBar.setBackgroundColorAsync(colors.surface).catch((error) => {
+      console.warn(error);
+    });
+    NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark').catch((error) => {
+      console.warn(error);
+    });
+  }, [colors.background, colors.surface, isDark]);
 
   React.useEffect(() => {
     if (!fontsLoaded || !isThemeReady) return;
