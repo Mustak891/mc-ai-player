@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { ColorSchemeName, useColorScheme } from 'react-native';
+import { Appearance, ColorSchemeName, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LIGHT_COLORS, DARK_COLORS } from '../constants/theme';
 
@@ -47,6 +47,8 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 if (!isMounted) return;
                 if (saved === 'light' || saved === 'dark' || saved === 'system') {
                     setThemePreferenceState(saved);
+                    // Apply native appearance immediately so Android doesn't flash dark mode
+                    Appearance.setColorScheme(saved === 'system' ? null : saved);
                 }
             })
             .catch(() => {})
@@ -64,6 +66,10 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const setThemePreference = useCallback((preference: ThemePreference) => {
         setThemePreferenceState(preference);
         AsyncStorage.setItem(THEME_STORAGE_KEY, preference).catch(() => {});
+        // Sync the native Appearance layer. This ensures useColorScheme() and
+        // the NavigationContainer theme recalculate correctly, and prevents
+        // Android's OS-level forced dark mode from overriding our colors.
+        Appearance.setColorScheme(preference === 'system' ? null : preference);
     }, []);
 
     const systemTheme = normalizeColorScheme(systemColorScheme);

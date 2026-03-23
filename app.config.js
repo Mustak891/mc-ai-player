@@ -72,6 +72,7 @@ module.exports = {
                 "foregroundImage": "./assets/adaptive-icon.png",
                 "backgroundColor": "#ffffff"
             },
+            "userInterfaceStyle": "light",
             "edgeToEdgeEnabled": true,
             "predictiveBackGestureEnabled": false,
             "package": "app.mcai.videoplayer",
