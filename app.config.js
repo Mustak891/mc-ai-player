@@ -3,8 +3,8 @@ require('dotenv').config();
 const isProdBuild = process.env.EAS_BUILD_PROFILE === 'production';
 const isTestAdMobId = (value) => typeof value === 'string' && value.includes('ca-app-pub-3940256099942544');
 
-if (!process.env.GEMINI_API_KEY) {
-    console.warn('\x1b[33m%s\x1b[0m', 'WARNING: GEMINI_API_KEY is not defined in environment variables.');
+if (!process.env.AI_BACKEND_URL && !process.env.GEMINI_API_KEY) {
+    console.warn('\x1b[33m%s\x1b[0m', 'WARNING: Neither AI_BACKEND_URL nor GEMINI_API_KEY is defined.');
     console.warn('\x1b[33m%s\x1b[0m', 'AI Analysis feature will not work in this build.');
 }
 
@@ -14,6 +14,9 @@ if (isProdBuild) {
     }
     if (!process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID) {
         throw new Error('ADMOB_REWARDED_INTERSTITIAL_UNIT_ID is required for production builds.');
+    }
+    if (!process.env.AI_BACKEND_URL && !process.env.GEMINI_API_KEY) {
+        throw new Error('Either AI_BACKEND_URL or GEMINI_API_KEY is required for production builds.');
     }
     if (isTestAdMobId(process.env.ADMOB_ANDROID_APP_ID) || isTestAdMobId(process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID)) {
         throw new Error('Production build is using AdMob test IDs. Replace with live AdMob IDs.');
