@@ -23,10 +23,7 @@ class MainApplication : Application(), ReactApplication {
       object : DefaultReactNativeHost(this) {
         override fun getPackages(): List<ReactPackage> =
             PackageList(this).packages.apply {
-              // Packages that cannot be autolinked yet can be added manually here, for example:
-              add(app.mcai.videoplayer.McAiPictureInPicturePackage())
-              add(app.mcai.videoplayer.McAiEqualizerPackage())
-              add(app.mcai.videoplayer.McAiFloatingOverlayPackage())
+              add(McAiNativePackage())
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
