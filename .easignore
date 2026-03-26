@@ -1,36 +1,22 @@
-# Keep EAS uploads small and deterministic.
-# This file is used by EAS when creating the remote build archive.
+# node dependencies
+node_modules/
 
-node_modules
-.git
-.expo
-dist
-web-build
+# Expo
+.expo/
+dist/
+web-build/
 
-# Local and generated native build folders
-.gradle
-android/.gradle
-android/build
-android/app/build
-android/app/.cxx
-ios/build
-temp_nextlib
+# Native build artifacts
+android/build/
+android/.gradle/
+android/app/build/
+ios/build/
 
-# Logs/temp
+# Temporary and cache folders
+.gradle/
+.gradle-clean-home/
+.kotlin/
+
+# Logs and crashes
 *.log
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-.DS_Store
-temp_config*.json
-
-# Secrets and local env files
-.env
-.env.*
-!.env.example
-*.jks
-*.keystore
-*.p8
-*.p12
-*.key
-*.mobileprovision
+hs_err_pid*
