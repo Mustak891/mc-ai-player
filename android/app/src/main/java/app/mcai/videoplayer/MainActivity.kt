@@ -68,7 +68,7 @@ class MainActivity : ReactActivity() {
       super.invokeDefaultOnBackPressed()
   }
 
-  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration?) {
+  override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
       super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
       val eventName = if (isInPictureInPictureMode) {
           "app.mcai.videoplayer.pip.STATE_ENTERED"
