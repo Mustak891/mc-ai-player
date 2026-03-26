@@ -15,6 +15,7 @@ import { useThemeContext } from '../context/ThemeContext';
 interface VideoCardProps {
     video: MediaLibrary.Asset;
     onPress: (video: MediaLibrary.Asset) => void;
+    onOptionsPress?: (video: MediaLibrary.Asset) => void;
     resumePositionMillis?: number;
 }
 
@@ -36,7 +37,7 @@ const getResolutionLabel = (width: number, height: number): { label: string; col
     return { label: 'SD', color: '#8A8A8A' };
 };
 
-const VideoCard = ({ video, onPress, resumePositionMillis = 0 }: VideoCardProps) => {
+const VideoCard = ({ video, onPress, onOptionsPress, resumePositionMillis = 0 }: VideoCardProps) => {
     const { colors } = useThemeContext();
     const styles = useStyles(colors);
     const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -76,8 +77,23 @@ const VideoCard = ({ video, onPress, resumePositionMillis = 0 }: VideoCardProps)
                         </View>
                     </View>
 
-                    {/* Resolution badge */}
-                    <View style={[styles.resBadge, { backgroundColor: resolution.color }]}>
+                    {/* Options Menu Button strictly top right */}
+                    {onOptionsPress && (
+                        <TouchableOpacity
+                            style={styles.optionsBtn}
+                            activeOpacity={0.6}
+                            onPress={(e) => {
+                                e.stopPropagation();
+                                onOptionsPress(video);
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                            <Ionicons name="ellipsis-vertical" size={16} color={colors.white} />
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Resolution badge shifted to left */}
+                    <View style={[styles.resBadge, { backgroundColor: resolution.color, left: 6, right: undefined }]}>
                         <Text style={styles.resBadgeText}>{resolution.label}</Text>
                     </View>
 
@@ -122,7 +138,8 @@ const areVideoCardPropsEqual = (prev: VideoCardProps, next: VideoCardProps) => {
         prev.video.duration === next.video.duration &&
         prev.video.modificationTime === next.video.modificationTime &&
         prev.resumePositionMillis === next.resumePositionMillis &&
-        prev.onPress === next.onPress
+        prev.onPress === next.onPress &&
+        prev.onOptionsPress === next.onOptionsPress
     );
 };
 
@@ -155,8 +172,6 @@ const useStyles = (colors: any) => StyleSheet.create({
         right: 0,
         height: 52,
         backgroundColor: 'transparent',
-        // Approximate linear gradient via layered opacity
-        borderBottomLeftRadius: 0,
     },
     playOverlay: {
         ...StyleSheet.absoluteFillObject,
@@ -172,6 +187,18 @@ const useStyles = (colors: any) => StyleSheet.create({
         borderColor: 'rgba(255,255,255,0.5)',
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    optionsBtn: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 10,
     },
     resBadge: {
         position: 'absolute',

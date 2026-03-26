@@ -10,9 +10,10 @@ const TermsAndConditionsScreen = () => {
     const { colors } = useThemeContext();
     const navigation = useNavigation();
     const insets = useSafeAreaInsets();
+    const styles = useStyles(colors, insets);
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={styles.container}>
             <View style={[styles.header, { paddingTop: Math.max(insets.top, SPACING.l) }]}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
@@ -71,16 +72,18 @@ const TermsAndConditionsScreen = () => {
     );
 };
 
-const styles = StyleSheet.create({
+const useStyles = (colors: any, insets: any) => StyleSheet.create({
     container: {
         flex: 1,
+        backgroundColor: colors.background,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         padding: SPACING.m,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.1)',
+        borderBottomColor: colors.borderSubtle,
+        backgroundColor: colors.surface,
     },
     backButton: {
         padding: SPACING.s,
@@ -89,6 +92,7 @@ const styles = StyleSheet.create({
         fontSize: FONT_SIZE.l,
         fontWeight: FONT_WEIGHT.bold,
         marginLeft: SPACING.m,
+        color: colors.text,
     },
     scrollContent: {
         padding: SPACING.l,
@@ -97,10 +101,12 @@ const styles = StyleSheet.create({
     text: {
         fontSize: FONT_SIZE.m,
         lineHeight: 24,
+        color: colors.text,
     },
     heading: {
         fontWeight: FONT_WEIGHT.bold,
         fontSize: FONT_SIZE.l,
+        color: colors.text,
     },
 });
 

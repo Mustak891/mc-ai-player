@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert, Platform, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert, Platform, TouchableOpacity, Share, Linking } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
+import { checkStoragePermission, requestStoragePermission } from '../utils/permissions';
 import { Audio } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -8,6 +9,9 @@ import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../cons
 import { useThemeContext } from '../context/ThemeContext';
 import AudioRow from '../components/AudioRow';
 import MiniPlayer from '../components/MiniPlayer';
+import MediaOptionsBottomSheet from '../components/MediaOptionsBottomSheet';
+import FileInfoModal from '../components/FileInfoModal';
+import * as Sharing from 'expo-sharing';
 
 interface AudioFile {
     id: string;
@@ -23,12 +27,14 @@ const AudioScreen = () => {
     const styles = useStyles(colors, insets);
 
     const [audioFiles, setAudioFiles] = useState<AudioFile[]>([]);
-    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions();
+    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [sound, setSound] = useState<Audio.Sound | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTrack, setCurrentTrack] = useState<AudioFile | null>(null);
     const [position, setPosition] = useState(0);
+    const [selectedAudioMenu, setSelectedAudioMenu] = useState<AudioFile | null>(null);
+    const [infoModalFile, setInfoModalFile] = useState<AudioFile | null>(null);
 
     useEffect(() => {
         if (Platform.OS === 'web') {
@@ -42,12 +48,21 @@ const AudioScreen = () => {
     }, []);
 
     const loadAudioFiles = async () => {
-        if (!permissionResponse?.granted) {
-            const { granted } = await requestPermission();
-            if (!granted) {
-                Alert.alert('Permission needed', 'Please grant media library permissions to list audio files.');
-                return;
-            }
+        let granted = await checkStoragePermission();
+        if (!granted) {
+            granted = await requestStoragePermission();
+        }
+        setHasPermission(granted);
+        if (!granted) {
+            Alert.alert(
+                'Permission Required',
+                'Please allow storage access in Settings to view your audio library.',
+                [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Open Settings", onPress: () => Linking.openSettings() }
+                ]
+            );
+            return;
         }
         setIsLoading(true);
         try {
@@ -120,6 +135,7 @@ const AudioScreen = () => {
                         item={item}
                         isPlaying={currentTrack?.id === item.id && isPlaying}
                         onPress={handleTrackPress}
+                        onOptionsPress={setSelectedAudioMenu}
                     />
                 )}
                 contentContainerStyle={[styles.listContent, { paddingBottom: (currentTrack ? 100 : SPACING.xl) + insets.bottom }]}
@@ -146,6 +162,72 @@ const AudioScreen = () => {
                     onClose={handleStop}
                 />
             )}
+
+            <MediaOptionsBottomSheet
+                visible={!!selectedAudioMenu}
+                onClose={() => setSelectedAudioMenu(null)}
+                asset={selectedAudioMenu as unknown as MediaLibrary.Asset}
+                actions={[
+                    {
+                        id: 'play',
+                        label: 'Play Track',
+                        icon: 'play-outline',
+                        onPress: () => {
+                            if (selectedAudioMenu) handleTrackPress(selectedAudioMenu);
+                        }
+                    },
+                    {
+                        id: 'info',
+                        label: 'Information',
+                        icon: 'information-circle-outline',
+                        onPress: () => {
+                            if (selectedAudioMenu) {
+                                setInfoModalFile(selectedAudioMenu);
+                                setSelectedAudioMenu(null);
+                            }
+                        }
+                    },
+                    {
+                        id: 'share',
+                        label: 'Share',
+                        icon: 'share-social-outline',
+                        onPress: async () => {
+                            if (selectedAudioMenu) {
+                                try {
+                                    await Sharing.shareAsync(selectedAudioMenu.uri, {
+                                        dialogTitle: `Share ${selectedAudioMenu.filename}`
+                                    });
+                                } catch (e) {
+                                    // Ignore cancel errors
+                                }
+                            }
+                        }
+                    },
+                    {
+                        id: 'delete',
+                        label: 'Delete',
+                        icon: 'trash-outline',
+                        danger: true,
+                        onPress: async () => {
+                            if (selectedAudioMenu) {
+                                try {
+                                    await MediaLibrary.deleteAssetsAsync([selectedAudioMenu as unknown as MediaLibrary.Asset]);
+                                    loadAudioFiles();
+                                    setSelectedAudioMenu(null);
+                                } catch (e) {
+                                    Alert.alert("Deletion Failed", "Could not delete this file. Make sure you grant the system permission.");
+                                }
+                            }
+                        }
+                    }
+                ]}
+            />
+            
+            <FileInfoModal 
+                visible={!!infoModalFile} 
+                onClose={() => setInfoModalFile(null)} 
+                file={infoModalFile as any} 
+            />
         </View>
     );
 };
@@ -153,12 +235,13 @@ const AudioScreen = () => {
 const useStyles = (colors: any, insets: any) => StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     header: {
-        paddingTop: insets.top,
+        paddingTop: insets.top + SPACING.s,
+        paddingBottom: SPACING.m,
+        paddingLeft: insets.left + SPACING.m,
+        paddingRight: insets.right + SPACING.m,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: SPACING.m,
-        paddingVertical: SPACING.s,
         backgroundColor: colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: colors.borderSubtle,
@@ -195,6 +278,8 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
     emptySubtitle: { color: colors.textSecondary, fontSize: FONT_SIZE.s, textAlign: 'center', maxWidth: 260 },
     listContent: {
         paddingTop: SPACING.s,
+        paddingLeft: insets.left,
+        paddingRight: insets.right,
     }
 });
 

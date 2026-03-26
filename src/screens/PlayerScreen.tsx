@@ -165,7 +165,7 @@ const PlayerScreen = () => {
     );
     const route = useRoute<PlayerScreenRouteProp>();
     const navigation = useNavigation<PlayerNavigationProp>();
-    const { videoUri, title, subtitleCandidates = [], initialResumePositionMillis = 0 } = route.params;
+    const { videoUri, title, subtitleCandidates = [], initialResumePositionMillis = 0, forcePlayFromStart = false } = route.params;
     const { width, height } = useWindowDimensions();
     const isIncognito = useSettingsStore((state) => state.isIncognito);
     const isLandscape = width > height;
@@ -827,7 +827,9 @@ const PlayerScreen = () => {
                 const resumeInfo = await loadResumeInfo(videoUri);
                 const prefs = await loadPlaybackPrefs(videoUri);
                 if (!alive) return;
-                if (resumePositionRef.current <= 0) {
+                if (forcePlayFromStart) {
+                    resumePositionRef.current = 0;
+                } else if (resumePositionRef.current <= 0) {
                     resumePositionRef.current = resumeInfo.positionMillis;
                 }
                 resumeUpdatedAtRef.current = resumeInfo.updatedAt;

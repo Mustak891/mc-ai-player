@@ -5,6 +5,7 @@ export type RootStackParamList = {
         title?: string;
         subtitleCandidates?: Array<{ uri: string; name: string }>;
         initialResumePositionMillis?: number;
+        forcePlayFromStart?: boolean;
     };
     PrivacyPolicy: undefined;
     TermsAndConditions: undefined;

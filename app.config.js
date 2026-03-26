@@ -31,7 +31,6 @@ module.exports = {
         "version": "1.0.0",
         "plugins": [
             "./withFFmpegExoPlayer.js",
-            "./withDisableForceDark.js",
             [
                 "react-native-google-mobile-ads",
                 {

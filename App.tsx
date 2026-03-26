@@ -17,18 +17,13 @@ const ThemedAppShell: React.FC<{ fontsLoaded: boolean }> = ({ fontsLoaded }) => 
   const { colors, isThemeReady, isDark } = useThemeContext();
 
   React.useEffect(() => {
-    // Update the app background (splash area behind the React Native view)
-    SystemUI.setBackgroundColorAsync(colors.background).catch((error) => {
-      console.warn(error);
-    });
-    // Update the Android system navigation bar (Back/Home/Recents button bar)
-    NavigationBar.setBackgroundColorAsync(colors.surface).catch((error) => {
-      console.warn(error);
-    });
+    // Under edgeToEdgeEnabled: true, the system natively handles backgrounds 
+    // and explicitly blocks manual SystemUI/NavigationBar color setters.
+    // Instead, we just let the React Native View background handle the styling!
     NavigationBar.setButtonStyleAsync(isDark ? 'light' : 'dark').catch((error) => {
       console.warn(error);
     });
-  }, [colors.background, colors.surface, isDark]);
+  }, [isDark]);
 
   React.useEffect(() => {
     if (!fontsLoaded || !isThemeReady) return;

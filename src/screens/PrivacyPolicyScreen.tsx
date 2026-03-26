@@ -10,18 +10,19 @@ const PrivacyPolicyScreen = () => {
     const { colors } = useThemeContext();
     const navigation = useNavigation();
     const insets = useSafeAreaInsets();
+    const styles = useStyles(colors, insets);
 
     return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
+        <View style={styles.container}>
             <View style={[styles.header, { paddingTop: Math.max(insets.top, SPACING.l) }]}>
                 <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={[styles.headerTitle, { color: colors.text }]}>Privacy Policy</Text>
+                <Text style={styles.headerTitle}>Privacy Policy</Text>
             </View>
 
             <ScrollView contentContainerStyle={styles.scrollContent}>
-                <Text style={[styles.text, { color: colors.text }]}>
+                <Text style={styles.text}>
                     <Text style={styles.heading}>Privacy Policy</Text>
                     {"\n\n"}
                     This privacy policy applies to the McAi player app (hereby referred to as "Application") for mobile devices that was created by Mustak ahamed (hereby referred to as "Service Provider") as an Ad Supported service. This service is intended for use "AS IS".
@@ -103,16 +104,19 @@ const PrivacyPolicyScreen = () => {
     );
 };
 
-const styles = StyleSheet.create({
+const useStyles = (colors: any, insets: any) => StyleSheet.create({
     container: {
         flex: 1,
+        backgroundColor: colors.background,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         padding: SPACING.m,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(255,255,255,0.1)',
+        borderBottomColor: colors.borderSubtle,
+        backgroundColor: colors.surface,
+        paddingTop: SPACING.m,
     },
     backButton: {
         padding: SPACING.s,
@@ -121,6 +125,7 @@ const styles = StyleSheet.create({
         fontSize: FONT_SIZE.l,
         fontWeight: FONT_WEIGHT.bold,
         marginLeft: SPACING.m,
+        color: colors.text,
     },
     scrollContent: {
         padding: SPACING.l,
@@ -129,10 +134,12 @@ const styles = StyleSheet.create({
     text: {
         fontSize: FONT_SIZE.m,
         lineHeight: 24,
+        color: colors.text,
     },
     heading: {
         fontWeight: FONT_WEIGHT.bold,
         fontSize: FONT_SIZE.l,
+        color: colors.text,
     },
 });
 

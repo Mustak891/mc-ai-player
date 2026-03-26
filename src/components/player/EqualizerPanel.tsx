@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -52,10 +52,119 @@ const EqualizerPanel = ({
     onDelete,
 }: Props) => {
     const { colors } = useThemeContext();
-    const styles = useStyles(colors);
+    const { width, height } = useWindowDimensions();
+    const isLandscape = width > height;
+    const styles = useStyles(colors, isLandscape, height);
+
     const presetLabel = useMemo(
         () => PRESET_ITEMS.find((item) => item.id === settings.presetId)?.label || 'Custom',
         [settings.presetId]
+    );
+
+    const presetsAndPreamp = (
+        <>
+            {!supported && (
+                <Text style={styles.unsupportedText}>
+                    Equalizer processing is currently Android-only in this build.
+                </Text>
+            )}
+            <View style={styles.presetRow}>
+                <Text style={styles.metaLabel}>Preset</Text>
+                <Text style={styles.metaValue}>{presetLabel}</Text>
+            </View>
+            <View style={styles.presetList}>
+                {PRESET_ITEMS.map((item) => (
+                    <TouchableOpacity
+                        key={item.id}
+                        style={[styles.presetChip, settings.presetId === item.id && styles.presetChipActive]}
+                        onPress={() => onSelectPreset(item.id)}
+                    >
+                        <Text style={styles.presetChipText}>{item.label}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+            {settings.customProfiles.length > 0 && (
+                <>
+                    <Text style={styles.customTitle}>Custom profiles</Text>
+                    <View style={styles.presetList}>
+                        {settings.customProfiles.map((profile) => (
+                            <TouchableOpacity
+                                key={profile.id}
+                                style={[
+                                    styles.presetChip,
+                                    settings.selectedCustomProfileId === profile.id && styles.presetChipActive,
+                                ]}
+                                onPress={() => onSelectCustomProfile(profile.id)}
+                            >
+                                <Text style={styles.presetChipText}>{profile.name}</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </>
+            )}
+
+            <View style={styles.preampRow}>
+                <Text style={styles.metaLabel}>Preamp</Text>
+                <Text style={styles.metaValue}>{settings.preampDb.toFixed(1)}dB</Text>
+            </View>
+            <Slider
+                minimumValue={-20}
+                maximumValue={20}
+                value={settings.preampDb}
+                onValueChange={onSetPreamp}
+                minimumTrackTintColor={colors.primary}
+                maximumTrackTintColor="rgba(255,255,255,0.2)"
+                thumbTintColor={colors.primary}
+            />
+            <View style={styles.snapRow}>
+                <Text style={styles.metaLabel}>Snap bands</Text>
+                <Switch
+                    value={settings.snapBands}
+                    onValueChange={onToggleSnap}
+                    thumbColor={colors.primary}
+                    trackColor={{ false: '#3A3A3A', true: '#6E3E12' }}
+                />
+            </View>
+        </>
+    );
+
+    const bandsSection = (
+        <>
+            <Text style={styles.bandTitle}>Bands</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bandRow}>
+                {EQUALIZER_FREQUENCIES.map((freq, index) => (
+                    <View key={freq} style={styles.bandItem}>
+                        <Text style={styles.dbTop}>+20dB</Text>
+                        <Slider
+                            style={styles.verticalSlider}
+                            minimumValue={-20}
+                            maximumValue={20}
+                            value={settings.bandsDb[index] ?? 0}
+                            onValueChange={(value) => onSetBand(index, value)}
+                            minimumTrackTintColor={colors.primary}
+                            maximumTrackTintColor="rgba(255,255,255,0.2)"
+                            thumbTintColor={colors.primary}
+                            step={settings.snapBands ? 1 : 0}
+                        />
+                        <Text style={styles.dbBottom}>-20dB</Text>
+                        <Text style={styles.freqText}>{formatFreq(freq)}</Text>
+                        <Text style={styles.bandValue}>{(settings.bandsDb[index] ?? 0).toFixed(0)}dB</Text>
+                    </View>
+                ))}
+            </ScrollView>
+
+            <View style={styles.footer}>
+                <TouchableOpacity style={styles.footerButton} onPress={onDelete}>
+                    <Text style={styles.footerButtonText}>DELETE</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.footerButton} onPress={onReset}>
+                    <Text style={styles.footerButtonText}>RESET</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.footerButton} onPress={onSave}>
+                    <Text style={[styles.footerButtonText, styles.saveText]}>SAVE</Text>
+                </TouchableOpacity>
+            </View>
+        </>
     );
 
     return (
@@ -78,125 +187,45 @@ const EqualizerPanel = ({
                         </View>
                     </View>
 
-                    {!supported && (
-                        <Text style={styles.unsupportedText}>
-                            Equalizer processing is currently Android-only in this build.
-                        </Text>
-                    )}
-
-                    <ScrollView showsVerticalScrollIndicator={false}>
-                        <View style={styles.presetRow}>
-                            <Text style={styles.metaLabel}>Preset</Text>
-                            <Text style={styles.metaValue}>{presetLabel}</Text>
+                    {isLandscape ? (
+                        // Landscape: two-column layout — left presets/preamp, right bands
+                        <View style={styles.landscapeBody}>
+                            <ScrollView style={styles.landscapeLeft} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                                {presetsAndPreamp}
+                            </ScrollView>
+                            <View style={styles.landscapeDivider} />
+                            <ScrollView style={styles.landscapeRight} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                                {bandsSection}
+                            </ScrollView>
                         </View>
-                        <View style={styles.presetList}>
-                            {PRESET_ITEMS.map((item) => (
-                                <TouchableOpacity
-                                    key={item.id}
-                                    style={[styles.presetChip, settings.presetId === item.id && styles.presetChipActive]}
-                                    onPress={() => onSelectPreset(item.id)}
-                                >
-                                    <Text style={styles.presetChipText}>{item.label}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                        {settings.customProfiles.length > 0 && (
-                            <>
-                                <Text style={styles.customTitle}>Custom profiles</Text>
-                                <View style={styles.presetList}>
-                                    {settings.customProfiles.map((profile) => (
-                                        <TouchableOpacity
-                                            key={profile.id}
-                                            style={[
-                                                styles.presetChip,
-                                                settings.selectedCustomProfileId === profile.id && styles.presetChipActive,
-                                            ]}
-                                            onPress={() => onSelectCustomProfile(profile.id)}
-                                        >
-                                            <Text style={styles.presetChipText}>{profile.name}</Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            </>
-                        )}
-
-                        <View style={styles.preampRow}>
-                            <Text style={styles.metaLabel}>Preamp</Text>
-                            <Text style={styles.metaValue}>{settings.preampDb.toFixed(1)}dB</Text>
-                        </View>
-                        <Slider
-                            minimumValue={-20}
-                            maximumValue={20}
-                            value={settings.preampDb}
-                            onValueChange={onSetPreamp}
-                            minimumTrackTintColor={colors.primary}
-                            maximumTrackTintColor="rgba(255,255,255,0.2)"
-                            thumbTintColor={colors.primary}
-                        />
-
-                        <Text style={styles.bandTitle}>Bands</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.bandRow}>
-                            {EQUALIZER_FREQUENCIES.map((freq, index) => (
-                                <View key={freq} style={styles.bandItem}>
-                                    <Text style={styles.dbTop}>+20dB</Text>
-                                    <Slider
-                                        style={styles.verticalSlider}
-                                        minimumValue={-20}
-                                        maximumValue={20}
-                                        value={settings.bandsDb[index] ?? 0}
-                                        onValueChange={(value) => onSetBand(index, value)}
-                                        minimumTrackTintColor={colors.primary}
-                                        maximumTrackTintColor="rgba(255,255,255,0.2)"
-                                        thumbTintColor={colors.primary}
-                                        step={settings.snapBands ? 1 : 0}
-                                    />
-                                    <Text style={styles.dbBottom}>-20dB</Text>
-                                    <Text style={styles.freqText}>{formatFreq(freq)}</Text>
-                                    <Text style={styles.bandValue}>{(settings.bandsDb[index] ?? 0).toFixed(0)}dB</Text>
-                                </View>
-                            ))}
+                    ) : (
+                        // Portrait: single column scroll
+                        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                            {presetsAndPreamp}
+                            {bandsSection}
                         </ScrollView>
-
-                        <View style={styles.snapRow}>
-                            <Text style={styles.metaLabel}>Snap bands</Text>
-                            <Switch
-                                value={settings.snapBands}
-                                onValueChange={onToggleSnap}
-                                thumbColor={colors.primary}
-                                trackColor={{ false: '#3A3A3A', true: '#6E3E12' }}
-                            />
-                        </View>
-
-                        <View style={styles.footer}>
-                            <TouchableOpacity style={styles.footerButton} onPress={onDelete}>
-                                <Text style={styles.footerButtonText}>DELETE</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.footerButton} onPress={onReset}>
-                                <Text style={styles.footerButtonText}>RESET</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.footerButton} onPress={onSave}>
-                                <Text style={[styles.footerButtonText, styles.saveText]}>SAVE</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </ScrollView>
+                    )}
                 </Pressable>
             </Pressable>
         </Modal>
     );
 };
 
-const useStyles = (colors: any) => StyleSheet.create({
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
     backdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.62)',
-        justifyContent: 'flex-end',
+        justifyContent: isLandscape ? 'center' : 'flex-end',
+        alignItems: isLandscape ? 'center' : 'stretch',
     },
     sheet: {
         backgroundColor: 'rgba(10,10,10,0.97)',
-        borderTopLeftRadius: 16,
-        borderTopRightRadius: 16,
+        borderRadius: isLandscape ? 16 : undefined,
+        borderTopLeftRadius: isLandscape ? 16 : 16,
+        borderTopRightRadius: isLandscape ? 16 : 16,
         padding: SPACING.m,
-        maxHeight: '84%',
+        maxHeight: isLandscape ? screenHeight * 0.94 : '84%',
+        width: isLandscape ? '95%' : '100%',
     },
     header: {
         flexDirection: 'row',
@@ -225,6 +254,22 @@ const useStyles = (colors: any) => StyleSheet.create({
         color: colors.textSecondary,
         marginTop: SPACING.s,
         marginBottom: SPACING.s,
+    },
+    landscapeBody: {
+        flexDirection: 'row',
+        flex: 1,
+        marginTop: SPACING.s,
+    },
+    landscapeLeft: {
+        flex: 1,
+    },
+    landscapeDivider: {
+        width: 1,
+        backgroundColor: 'rgba(255,255,255,0.1)',
+        marginHorizontal: SPACING.m,
+    },
+    landscapeRight: {
+        flex: 1,
     },
     presetRow: {
         marginTop: SPACING.m,

@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
 import { ThemePreference } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
@@ -29,7 +29,7 @@ const MoreScreen = () => {
     const themeIcon = resolvedTheme === 'dark' ? 'moon' : 'sunny';
     const activeThemeOption = themePreference === 'system' ? resolvedTheme : themePreference;
     const themeStatusText = isSystemThemeSelected
-        ? `System selected � Following ${systemTheme === 'dark' ? 'Dark' : 'Light'}`
+        ? `System selected • Following ${systemTheme === 'dark' ? 'Dark' : 'Light'}`
         : `Using ${resolvedTheme === 'dark' ? 'Dark' : 'Light'} mode`;
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
@@ -286,3 +286,4 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
 });
 
 export default MoreScreen;
+

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, ScrollView, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { FONT_SIZE, FONT_WEIGHT, SPACING, RADIUS } from '../constants/theme';
 import { useThemeContext } from '../context/ThemeContext';
@@ -12,7 +12,9 @@ interface DisplaySettingsModalProps {
 
 const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ visible, onClose }) => {
     const { colors } = useThemeContext();
-    const styles = useStyles(colors);
+    const { width, height } = useWindowDimensions();
+    const isLandscape = width > height;
+    const styles = useStyles(colors, isLandscape, height);
     const {
         viewMode, setViewMode,
         sortBy, setSortBy,
@@ -83,7 +85,7 @@ const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ visible, on
                 <View style={styles.sheet} onStartShouldSetResponder={() => true}>
                     {renderHeader()}
 
-                    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+                    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false} style={styles.scrollView}>
                         {/* Top Options */}
                         <View style={styles.section}>
                             {renderActionRow(
@@ -135,17 +137,23 @@ const DisplaySettingsModal: React.FC<DisplaySettingsModalProps> = ({ visible, on
     );
 };
 
-const useStyles = (colors: any) => StyleSheet.create({
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
     overlay: {
         flex: 1,
         backgroundColor: 'rgba(0, 0, 0, 0.6)',
-        justifyContent: 'flex-end',
+        justifyContent: isLandscape ? 'center' : 'flex-end',
+        alignItems: isLandscape ? 'center' : 'stretch',
     },
     sheet: {
         backgroundColor: colors.background,
         borderTopLeftRadius: RADIUS.l,
         borderTopRightRadius: RADIUS.l,
-        height: '80%', // Takes up similar space to VLC
+        borderRadius: isLandscape ? RADIUS.l : undefined,
+        maxHeight: isLandscape ? screenHeight * 0.94 : '80%',
+        width: isLandscape ? '65%' : '100%',
+    },
+    scrollView: {
+        flex: 1,
     },
     header: {
         flexDirection: 'row',

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -23,7 +23,7 @@ type ToggleRowProps = {
 };
 
 const ToggleRow = ({ title, subtitle, value, onValueChange, colors }: ToggleRowProps & { colors: any }) => {
-    const styles = useStyles(colors);
+    const styles = useStyles(colors, false, 0);
     return (
         <View style={styles.row}>
             <View style={styles.rowTextWrap}>
@@ -34,7 +34,7 @@ const ToggleRow = ({ title, subtitle, value, onValueChange, colors }: ToggleRowP
                 value={value}
                 onValueChange={onValueChange}
                 thumbColor={colors.primary}
-                trackColor={{ false: colors.border, true: colors.primary + '80' }} // Append alpha for track color
+                trackColor={{ false: colors.border, true: colors.primary + '80' }}
             />
         </View>
     );
@@ -42,7 +42,10 @@ const ToggleRow = ({ title, subtitle, value, onValueChange, colors }: ToggleRowP
 
 const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScreenshotInfo }: Props) => {
     const { colors } = useThemeContext();
-    const styles = useStyles(colors);
+    const { width, height } = useWindowDimensions();
+    const isLandscape = width > height;
+    const styles = useStyles(colors, isLandscape, height);
+
     const update = <K extends keyof PlayerControlSettings>(key: K, value: PlayerControlSettings[K]) => {
         onChange({ ...settings, [key]: value });
     };
@@ -57,7 +60,7 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
                             <Ionicons name="close-outline" size={24} color={colors.text} />
                         </TouchableOpacity>
                     </View>
-                    <ScrollView showsVerticalScrollIndicator={false}>
+                    <ScrollView showsVerticalScrollIndicator={false} style={styles.scrollArea} keyboardShouldPersistTaps="handled">
                         <ToggleRow
                             title="Audio-boost"
                             subtitle="Allow volume up to 200%"
@@ -196,6 +199,8 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
                             }}
                             colors={colors}
                         />
+                        {/* Bottom padding for last item in scroll */}
+                        <View style={{ height: 16 }} />
                     </ScrollView>
                 </Pressable>
             </Pressable>
@@ -203,15 +208,20 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
     );
 };
 
-const useStyles = (colors: any) => StyleSheet.create({
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
     backdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.65)',
-        justifyContent: 'flex-end',
+        justifyContent: isLandscape ? 'center' : 'flex-end',
+        alignItems: isLandscape ? 'center' : 'stretch',
+        padding: isLandscape ? SPACING.m : 0,
     },
     sheet: {
-        maxHeight: '80%',
-        borderRadius: 20,
+        maxHeight: isLandscape ? screenHeight * 0.94 : '80%',
+        width: isLandscape ? '70%' : '100%',
+        borderRadius: isLandscape ? 20 : undefined,
+        borderTopLeftRadius: isLandscape ? 20 : 20,
+        borderTopRightRadius: isLandscape ? 20 : 20,
         backgroundColor: colors.surface,
         borderWidth: 1,
         borderColor: colors.border,
@@ -221,6 +231,9 @@ const useStyles = (colors: any) => StyleSheet.create({
         shadowOffset: { width: 0, height: 12 },
         shadowOpacity: 0.3,
         shadowRadius: 24,
+    },
+    scrollArea: {
+        flex: 1,
     },
     header: {
         flexDirection: 'row',

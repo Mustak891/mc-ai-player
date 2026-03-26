@@ -42,7 +42,7 @@ class McAiFloatingOverlayModule(private val reactContext: ReactApplicationContex
      */
     @ReactMethod
     fun openPermissionSettings(promise: Promise) {
-        val activity = currentActivity ?: run {
+        val activity = reactContext.currentActivity ?: run {
             promise.reject("NO_ACTIVITY", "Activity is null")
             return
         }
@@ -64,7 +64,7 @@ class McAiFloatingOverlayModule(private val reactContext: ReactApplicationContex
      */
     @ReactMethod
     fun startOverlay(uri: String, positionMs: Double, playWhenReady: Boolean, title: String, promise: Promise) {
-        val activity = currentActivity ?: run {
+        val activity = reactContext.currentActivity ?: run {
             promise.reject("NO_ACTIVITY", "Activity is null")
             return
         }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View, ScrollView } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View, ScrollView, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { FONT_SIZE, SPACING } from '../../constants/theme';
@@ -24,7 +24,10 @@ const TIPS = [
 
 const VideoTipsModal = ({ visible, onClose }: Props) => {
     const { colors } = useThemeContext();
-    const styles = useStyles(colors);
+    const { width, height } = useWindowDimensions();
+    const isLandscape = width > height;
+    const styles = useStyles(colors, isLandscape, height);
+
     const [index, setIndex] = useState(0);
     const item = useMemo(() => TIPS[index] || TIPS[0], [index]);
     const last = index === TIPS.length - 1;
@@ -49,7 +52,11 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView contentContainerStyle={styles.contentScroll} style={styles.contentBase} showsVerticalScrollIndicator={false}>
+                    <ScrollView
+                        contentContainerStyle={styles.contentScroll}
+                        style={styles.contentBase}
+                        showsVerticalScrollIndicator={false}
+                    >
                         <Text style={styles.tipTitle}>{item.title}</Text>
                         <Text style={styles.tipBody}>{item.body}</Text>
                     </ScrollView>
@@ -57,7 +64,9 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
                     <View style={styles.footer}>
                         <View style={styles.dots}>
                             {TIPS.map((_, idx) => (
-                                <View key={idx} style={[styles.dot, idx === index && styles.dotActive]} />
+                                <TouchableOpacity key={idx} onPress={() => setIndex(idx)}>
+                                    <View style={[styles.dot, idx === index && styles.dotActive]} />
+                                </TouchableOpacity>
                             ))}
                         </View>
                         <TouchableOpacity style={styles.nextButton} onPress={handleNext}>
@@ -71,23 +80,23 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
     );
 };
 
-const useStyles = (colors: any) => StyleSheet.create({
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
     backdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.65)',
         justifyContent: 'center',
         padding: SPACING.m,
+        alignItems: 'center',
     },
     sheet: {
         borderRadius: 20,
         backgroundColor: colors.surface,
         borderWidth: 1,
         borderColor: colors.border,
-        padding: SPACING.l,
-        width: '100%',
-        maxWidth: 400,
-        maxHeight: '90%',
-        minHeight: 340,
+        padding: isLandscape ? SPACING.m : SPACING.l,
+        width: isLandscape ? '65%' : '100%',
+        maxWidth: 480,
+        maxHeight: isLandscape ? screenHeight * 0.92 : '90%',
         elevation: 24,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 12 },
@@ -98,11 +107,11 @@ const useStyles = (colors: any) => StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginBottom: SPACING.m,
+        marginBottom: isLandscape ? SPACING.s : SPACING.m,
     },
     title: {
         color: colors.primary,
-        fontSize: FONT_SIZE.s,
+        fontSize: isLandscape ? FONT_SIZE.xs : FONT_SIZE.s,
         fontWeight: '700',
         textTransform: 'uppercase',
         letterSpacing: 1.2,
@@ -116,35 +125,35 @@ const useStyles = (colors: any) => StyleSheet.create({
         justifyContent: 'center',
     },
     contentBase: {
-        // Removed flex: 1 to prevent layout strict-clamping
-        marginVertical: SPACING.m,
+        flex: 1,
+        marginVertical: isLandscape ? SPACING.xs : SPACING.m,
     },
     contentScroll: {
-        // Removed flexGrow: 1 to ensure natural content sizing
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: SPACING.s,
+        paddingVertical: SPACING.s,
     },
     tipTitle: {
         color: colors.text,
-        fontSize: FONT_SIZE.xxl,
+        fontSize: isLandscape ? FONT_SIZE.l : FONT_SIZE.xxl,
         fontWeight: '800',
         textAlign: 'center',
-        marginBottom: SPACING.m,
+        marginBottom: isLandscape ? SPACING.s : SPACING.m,
         letterSpacing: -0.5,
     },
     tipBody: {
         color: colors.subtext,
-        fontSize: FONT_SIZE.m,
+        fontSize: isLandscape ? FONT_SIZE.s : FONT_SIZE.m,
         textAlign: 'center',
-        lineHeight: 24,
+        lineHeight: isLandscape ? 20 : 24,
         fontWeight: '500',
     },
     footer: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        marginTop: SPACING.l,
+        marginTop: isLandscape ? SPACING.s : SPACING.l,
     },
     dots: {
         flexDirection: 'row',
@@ -165,12 +174,12 @@ const useStyles = (colors: any) => StyleSheet.create({
         alignItems: 'center',
         backgroundColor: colors.primary,
         paddingHorizontal: SPACING.l,
-        paddingVertical: 10,
+        paddingVertical: isLandscape ? 8 : 10,
         borderRadius: 20,
         gap: SPACING.xs,
     },
     nextButtonText: {
-        color: '#FFFFFF', // Keep button text purely white for contrast against the brand primary color
+        color: '#FFFFFF',
         fontSize: FONT_SIZE.s,
         fontWeight: '700',
     },

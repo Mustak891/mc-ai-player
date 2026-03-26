@@ -10,6 +10,9 @@ import {
     Keyboard,
     InteractionManager,
     Linking,
+    Alert,
+    Share,
+    Platform,
 } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -22,6 +25,9 @@ import { useThemeContext } from '../context/ThemeContext';
 import { useVideoLibrary } from '../hooks/useVideoLibrary';
 import VideoCard from '../components/VideoCard';
 import DisplaySettingsModal from '../components/DisplaySettingsModal';
+import MediaOptionsBottomSheet, { MenuAction } from '../components/MediaOptionsBottomSheet';
+import FileInfoModal from '../components/FileInfoModal';
+import * as Sharing from 'expo-sharing';
 import { RootStackParamList } from '../navigation/types';
 import { readResumeInfoStore, readResumeStore, ResumeStoreEntry } from '../utils/resumeStore';
 import { useSettingsStore } from '../store/settingsStore';
@@ -77,6 +83,8 @@ const VideoLibraryScreen = () => {
     const [resumeInfoMap, setResumeInfoMap] = useState<Record<string, ResumeStoreEntry>>({});
     const [isMenuOpen, setIsMenuOpen] = useState(false);
     const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+    const [selectedVideoMenu, setSelectedVideoMenu] = useState<MediaLibrary.Asset | null>(null);
+    const [infoModalFile, setInfoModalFile] = useState<MediaLibrary.Asset | null>(null);
     const lastOpenVideoRef = useRef<{ uri: string; at: number } | null>(null);
 
     // Use libraryReady to defer the initial scan until after navigation animations
@@ -205,6 +213,7 @@ const VideoLibraryScreen = () => {
             <VideoCard
                 video={item}
                 onPress={handleVideoPress}
+                onOptionsPress={setSelectedVideoMenu}
                 resumePositionMillis={resumeMap[item.uri] ?? 0}
             />
         ),
@@ -325,19 +334,22 @@ const VideoLibraryScreen = () => {
                             <TouchableOpacity
                                 style={[styles.permissionButton, { backgroundColor: colors.primary }]}
                                 onPress={async () => {
-                                    if (canAskAgain) {
-                                        const res = await requestPermission();
-                                        if (res.granted) {
-                                            refetch();
-                                        }
+                                    const res = await requestPermission();
+                                    if (res.granted) {
+                                        refetch();
                                     } else {
-                                        Linking.openSettings();
+                                        Alert.alert(
+                                            "Permission Required", 
+                                            "Please allow storage access in Settings to view your library.", 
+                                            [
+                                                { text: "Cancel", style: "cancel" },
+                                                { text: "Open Settings", onPress: () => Linking.openSettings() }
+                                            ]
+                                        );
                                     }
                                 }}
                             >
-                                <Text style={styles.permissionButtonText}>
-                                    {canAskAgain ? 'Grant Permission' : 'Open Settings'}
-                                </Text>
+                                <Text style={styles.permissionButtonText}>Grant Permission</Text>
                             </TouchableOpacity>
                         </View>
                     ) : (
@@ -357,6 +369,86 @@ const VideoLibraryScreen = () => {
                 visible={isSettingsModalVisible}
                 onClose={() => setIsSettingsModalVisible(false)}
             />
+
+            <MediaOptionsBottomSheet
+                visible={!!selectedVideoMenu}
+                onClose={() => setSelectedVideoMenu(null)}
+                asset={selectedVideoMenu}
+                actions={[
+                    {
+                        id: 'play',
+                        label: 'Play',
+                        icon: 'play-outline',
+                        onPress: () => {
+                            if (selectedVideoMenu) handleVideoPress(selectedVideoMenu);
+                        }
+                    },
+                    {
+                        id: 'play-start',
+                        label: 'Play from start',
+                        icon: 'play-skip-back-outline',
+                        onPress: () => {
+                            if (selectedVideoMenu) {
+                                navigation.navigate('Player', {
+                                    videoUri: selectedVideoMenu.uri,
+                                    title: selectedVideoMenu.filename,
+                                    initialResumePositionMillis: 0,
+                                    forcePlayFromStart: true,
+                                });
+                            }
+                        }
+                    },
+                    {
+                        id: 'info',
+                        label: 'Information',
+                        icon: 'information-circle-outline',
+                        onPress: () => {
+                            if (selectedVideoMenu) {
+                                setInfoModalFile(selectedVideoMenu);
+                                setSelectedVideoMenu(null);
+                            }
+                        }
+                    },
+                    {
+                        id: 'share',
+                        label: 'Share',
+                        icon: 'share-social-outline',
+                        onPress: async () => {
+                            if (selectedVideoMenu) {
+                                try {
+                                    await Sharing.shareAsync(selectedVideoMenu.uri, {
+                                        dialogTitle: `Share ${selectedVideoMenu.filename}`
+                                    });
+                                } catch (e) {
+                                    // Handle share error silently
+                                }
+                            }
+                        }
+                    },
+                    {
+                        id: 'delete',
+                        label: 'Delete',
+                        icon: 'trash-outline',
+                        danger: true,
+                        onPress: async () => {
+                            if (selectedVideoMenu) {
+                                try {
+                                    await MediaLibrary.deleteAssetsAsync([selectedVideoMenu]);
+                                    refetch();
+                                    setSelectedVideoMenu(null);
+                                } catch (e) {
+                                    Alert.alert("Deletion Failed", "Could not delete this file. Make sure you grant the system permission.");
+                                }
+                            }
+                        }
+                    }
+                ]}
+            />
+            <FileInfoModal 
+                visible={!!infoModalFile} 
+                onClose={() => setInfoModalFile(null)} 
+                file={infoModalFile as any} 
+            />
         </View>
     );
 };
@@ -367,12 +459,13 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         backgroundColor: colors.background,
     },
     header: {
-        paddingTop: insets.top,
+        paddingTop: insets.top + SPACING.s,
+        paddingBottom: SPACING.m,
+        paddingLeft: insets.left + SPACING.m,
+        paddingRight: insets.right + SPACING.m,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: SPACING.m,
-        paddingVertical: SPACING.s,
         backgroundColor: colors.surface,
         borderBottomWidth: 1,
         borderBottomColor: colors.borderSubtle,
@@ -424,7 +517,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
     dropdownMenu: {
         position: 'absolute',
         top: 60 + insets.top,
-        right: SPACING.m,
+        right: insets.right + SPACING.m,
         backgroundColor: colors.surfaceHigh,
         borderRadius: RADIUS.m,
         paddingVertical: SPACING.xs,
@@ -450,7 +543,9 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         fontSize: FONT_SIZE.m,
     },
     listContent: {
-        padding: SPACING.s,
+        paddingVertical: SPACING.s,
+        paddingLeft: insets.left + SPACING.s,
+        paddingRight: insets.right + SPACING.s,
         paddingBottom: SPACING.xl,
     },
     scanningBanner: {
@@ -499,7 +594,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         shadowRadius: 3,
     },
     permissionButtonText: {
-        color: '#FFFFFF',
+        color: colors.white,
         fontSize: FONT_SIZE.m,
         fontWeight: FONT_WEIGHT.bold,
         letterSpacing: LETTER_SPACING.normal,

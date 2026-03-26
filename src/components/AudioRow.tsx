@@ -23,6 +23,7 @@ interface AudioRowProps {
     item: AudioFile;
     isPlaying: boolean;
     onPress: (item: AudioFile) => void;
+    onOptionsPress?: (item: AudioFile) => void;
 }
 
 // Animated equalizer bars
@@ -68,7 +69,7 @@ const getEqStyles = () => StyleSheet.create({
     },
 });
 
-const AudioRow = ({ item, isPlaying, onPress }: AudioRowProps) => {
+const AudioRow = ({ item, isPlaying, onPress, onOptionsPress }: AudioRowProps) => {
     const { colors } = useThemeContext();
     const styles = useStyles(colors);
     const eqStyles = getEqStyles();
@@ -116,6 +117,16 @@ const AudioRow = ({ item, isPlaying, onPress }: AudioRowProps) => {
                 <View style={styles.rightSection}>
                     {isPlaying ? (
                         <View style={styles.playingDot} />
+                    ) : onOptionsPress ? (
+                        <TouchableOpacity
+                            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+                            onPress={(e) => {
+                                e.stopPropagation();
+                                onOptionsPress(item);
+                            }}
+                        >
+                            <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
+                        </TouchableOpacity>
                     ) : (
                         <Ionicons name="ellipsis-vertical" size={18} color={colors.textMuted} />
                     )}

@@ -1,27 +1,46 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as MediaLibrary from 'expo-media-library';
 import { Alert, AppState, AppStateStatus } from 'react-native';
+import { checkStoragePermission, requestStoragePermission } from '../utils/permissions';
 
 export const useVideoLibrary = (lazy: boolean = false) => {
     const [videos, setVideos] = useState<MediaLibrary.Asset[]>([]);
-    // Use granular permission hook — we will trigger the request ourselves
-    const [permissionResponse, requestPermission] = MediaLibrary.usePermissions({ request: false });
+    const [hasPermission, setHasPermission] = useState<boolean | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [hasRequestedOnce, setHasRequestedOnce] = useState(false);
 
     // Track whether a fetch is already in progress to prevent duplicate calls
     const fetchingRef = useRef(false);
     const lazyRef = useRef(lazy);
+    const hasRequestedRef = useRef(false);
 
     useEffect(() => {
         lazyRef.current = lazy;
     }, [lazy]);
 
+    // AUTO-REQUEST ON MOUNT: Check silently, then request if needed.
+    // This perfectly shows the native dialog on first launch automatically.
+    useEffect(() => {
+        let isMounted = true;
+        if (hasRequestedRef.current) return;
+        hasRequestedRef.current = true;
+
+        const init = async () => {
+            let granted = await checkStoragePermission();
+            if (!granted) {
+                granted = await requestStoragePermission();
+            }
+            if (isMounted) setHasPermission(granted);
+        };
+        void init();
+        
+        return () => { isMounted = false; };
+    }, []);
+
     const fetchVideos = useCallback(async () => {
         if (fetchingRef.current) return;
         fetchingRef.current = true;
 
-        if (!permissionResponse?.granted) {
+        if (!hasPermission) {
             fetchingRef.current = false;
             return;
         }
@@ -41,53 +60,44 @@ export const useVideoLibrary = (lazy: boolean = false) => {
             setIsLoading(false);
             fetchingRef.current = false;
         }
-    }, [permissionResponse?.granted]);
-
-    // AUTO-REQUEST ON MOUNT: If we haven't asked yet and canAskAgain is true, ask immediately.
-    // This ensures on a fresh install the native dialog appears without the user needing to tap anything.
-    useEffect(() => {
-        if (hasRequestedOnce) return;
-        if (permissionResponse === null) return; // Still loading permission status, wait
-
-        if (!permissionResponse.granted && permissionResponse.canAskAgain) {
-            setHasRequestedOnce(true);
-            void requestPermission();
-        } else {
-            setHasRequestedOnce(true);
-        }
-    }, [permissionResponse, hasRequestedOnce, requestPermission]);
+    }, [hasPermission]);
 
     // APP STATE LISTENER: When user comes back from Settings after granting permission,
     // automatically re-check and load videos without requiring a manual restart.
     useEffect(() => {
         const handleAppStateChange = (nextState: AppStateStatus) => {
             if (nextState === 'active') {
-                // Re-fetch if the permission state has become granted
-                if (permissionResponse?.granted) {
-                    void fetchVideos();
-                }
+                void checkStoragePermission().then(granted => {
+                    setHasPermission(granted);
+                });
             }
         };
         const subscription = AppState.addEventListener('change', handleAppStateChange);
         return () => subscription.remove();
-    }, [permissionResponse?.granted, fetchVideos]);
+    }, []);
 
     // AUTO-FETCH: Whenever permission is granted and lazy=false, load the library.
     useEffect(() => {
         if (lazy) return;
-        if (!permissionResponse?.granted) return;
+        if (hasPermission) {
+            void fetchVideos();
+        }
+    }, [hasPermission, lazy, fetchVideos]);
 
-        void fetchVideos();
-    }, [permissionResponse?.granted, lazy, fetchVideos]);
+    const requestPermission = useCallback(async () => {
+        const granted = await requestStoragePermission();
+        setHasPermission(granted);
+        return { granted, canAskAgain: true, status: granted ? 'granted' : 'denied' };
+    }, []);
 
     return {
         videos,
         isLoading,
         refetch: fetchVideos,
         // isPermissionLoading: true while we haven't got an answer from the OS yet
-        isPermissionLoading: permissionResponse === null,
-        hasPermission: permissionResponse?.granted ?? false,
-        canAskAgain: permissionResponse?.canAskAgain ?? true,
+        isPermissionLoading: hasPermission === null,
+        hasPermission: hasPermission ?? false,
+        canAskAgain: true, // Legacy compatibility, native OS handles prompts now.
         requestPermission,
     };
 };
