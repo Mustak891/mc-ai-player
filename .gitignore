@@ -48,3 +48,6 @@ yarn-error.*
 *.tsbuildinfo
 temp_nextlib/
 temp_config*.json
+
+# build artifacts
+.gradle-clean-home/
