@@ -1,54 +1,53 @@
-import { PermissionsAndroid, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 
-export const checkStoragePermission = async (): Promise<boolean> => {
+export type StoragePermissionKind = 'audio' | 'photo' | 'video';
+
+const hasMediaAccess = (permission: MediaLibrary.PermissionResponse) =>
+    permission.granted || permission.accessPrivileges === 'limited';
+
+const getGranularPermissions = (
+    kind: StoragePermissionKind
+): MediaLibrary.GranularPermission[] | undefined => {
     if (Platform.OS !== 'android') {
-        const res = await MediaLibrary.getPermissionsAsync();
-        return res.granted;
+        return undefined;
     }
+    return [kind];
+};
+
+export const checkStoragePermission = async (
+    kind: StoragePermissionKind = 'video'
+): Promise<boolean> => {
     try {
-        if ((Platform.Version as number) >= 33) {
-            const hasVideo = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO);
-            const hasAudio = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO);
-            return hasVideo || hasAudio;
-        } else {
-            return await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
-        }
-    } catch (e) {
+        const res = await MediaLibrary.getPermissionsAsync(false, getGranularPermissions(kind));
+        return hasMediaAccess(res);
+    } catch {
         return false;
     }
 };
 
-let isRequesting = false;
+const pendingRequests = new Map<StoragePermissionKind, Promise<boolean>>();
 
-export const requestStoragePermission = async (): Promise<boolean> => {
-    if (isRequesting) return false;
-    
-    if (Platform.OS !== 'android') {
-        const res = await MediaLibrary.requestPermissionsAsync();
-        return res.granted;
+export const requestStoragePermission = async (
+    kind: StoragePermissionKind = 'video'
+): Promise<boolean> => {
+    const existingRequest = pendingRequests.get(kind);
+    if (existingRequest) {
+        return existingRequest;
     }
-    
-    isRequesting = true;
-    try {
-        if ((Platform.Version as number) >= 33) {
-            const granted = await PermissionsAndroid.requestMultiple([
-                PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO,
-                PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO,
-                PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES,
-            ]);
-            return (
-                granted[PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO] === PermissionsAndroid.RESULTS.GRANTED ||
-                granted[PermissionsAndroid.PERMISSIONS.READ_MEDIA_AUDIO] === PermissionsAndroid.RESULTS.GRANTED
-            );
-        } else {
-            const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
-            return result === PermissionsAndroid.RESULTS.GRANTED;
+
+    const requestPromise = (async () => {
+        try {
+            const res = await MediaLibrary.requestPermissionsAsync(false, getGranularPermissions(kind));
+            return hasMediaAccess(res);
+        } catch (e) {
+            console.error('Permission Request Error', e);
+            return false;
+        } finally {
+            pendingRequests.delete(kind);
         }
-    } catch (e) {
-        console.error('Permission Request Error', e);
-        return false;
-    } finally {
-        isRequesting = false;
-    }
+    })();
+
+    pendingRequests.set(kind, requestPromise);
+    return requestPromise;
 };

@@ -280,11 +280,16 @@ const BrowseScreen = () => {
             const candidates = files
                 .filter((item) => !item.isDirectory && isSubtitleFileName(item.name))
                 .map((item) => ({ uri: item.uri, name: getDisplayFileName(item.name, item.uri) }));
-            navigation.navigate('Player', { videoUri: uri, title: playbackTitle, subtitleCandidates: candidates });
+            navigation.navigate('Player', {
+                videoUri: uri,
+                title: playbackTitle,
+                subtitleCandidates: candidates,
+                initialResumePositionMillis: resumeMap[uri] ?? 0,
+            });
         } else {
             Alert.alert('Unsupported', 'This file type is not supported yet.');
         }
-    }, [files, navigation]);
+    }, [files, navigation, resumeMap]);
 
     const handleGoBack = () => {
         if (directoryHistory.length > 0) {

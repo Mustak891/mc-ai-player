@@ -23,7 +23,7 @@ type ToggleRowProps = {
 };
 
 const ToggleRow = ({ title, subtitle, value, onValueChange, colors }: ToggleRowProps & { colors: any }) => {
-    const styles = useStyles(colors, false, 0);
+    const styles = useStyles(colors, false, 0, 0);
     return (
         <View style={styles.row}>
             <View style={styles.rowTextWrap}>
@@ -44,7 +44,7 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
     const { colors } = useThemeContext();
     const { width, height } = useWindowDimensions();
     const isLandscape = width > height;
-    const styles = useStyles(colors, isLandscape, height);
+    const styles = useStyles(colors, isLandscape, height, width);
 
     const update = <K extends keyof PlayerControlSettings>(key: K, value: PlayerControlSettings[K]) => {
         onChange({ ...settings, [key]: value });
@@ -60,7 +60,14 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
                             <Ionicons name="close-outline" size={24} color={colors.text} />
                         </TouchableOpacity>
                     </View>
-                    <ScrollView showsVerticalScrollIndicator={false} style={styles.scrollArea} keyboardShouldPersistTaps="handled">
+                    <View style={styles.body}>
+                        <ScrollView
+                            showsVerticalScrollIndicator={false}
+                            style={styles.scrollArea}
+                            contentContainerStyle={styles.scrollContent}
+                            keyboardShouldPersistTaps="handled"
+                            nestedScrollEnabled
+                        >
                         <ToggleRow
                             title="Audio-boost"
                             subtitle="Allow volume up to 200%"
@@ -199,26 +206,31 @@ const ControlSettingsPanel = ({ visible, settings, onClose, onChange, onOpenScre
                             }}
                             colors={colors}
                         />
-                        {/* Bottom padding for last item in scroll */}
-                        <View style={{ height: 16 }} />
-                    </ScrollView>
+                            <View style={styles.bottomSpacer} />
+                        </ScrollView>
+                    </View>
                 </Pressable>
             </Pressable>
         </Modal>
     );
 };
 
-const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
-    backdrop: {
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number, screenWidth: number) => {
+    const sheetHeight = Math.min(screenHeight * (isLandscape ? 0.9 : 0.82), isLandscape ? 760 : 700);
+    const landscapeWidth = Math.min(screenWidth * 0.72, 760);
+
+    return StyleSheet.create({
+        backdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.65)',
         justifyContent: isLandscape ? 'center' : 'flex-end',
         alignItems: isLandscape ? 'center' : 'stretch',
         padding: isLandscape ? SPACING.m : 0,
-    },
-    sheet: {
-        maxHeight: isLandscape ? screenHeight * 0.94 : '80%',
-        width: isLandscape ? '70%' : '100%',
+        },
+        sheet: {
+        height: sheetHeight,
+        maxHeight: sheetHeight,
+        width: isLandscape ? landscapeWidth : '100%',
         borderRadius: isLandscape ? 20 : undefined,
         borderTopLeftRadius: isLandscape ? 20 : 20,
         borderTopRightRadius: isLandscape ? 20 : 20,
@@ -231,32 +243,43 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
         shadowOffset: { width: 0, height: 12 },
         shadowOpacity: 0.3,
         shadowRadius: 24,
-    },
-    scrollArea: {
+        overflow: 'hidden',
+        },
+        body: {
         flex: 1,
-    },
-    header: {
+        minHeight: 0,
+        },
+        scrollArea: {
+        flex: 1,
+        minHeight: 0,
+        },
+        scrollContent: {
+        flexGrow: 1,
+        justifyContent: 'flex-start',
+        paddingBottom: SPACING.l,
+        },
+        header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         marginBottom: SPACING.l,
-    },
-    title: {
+        },
+        title: {
         color: colors.primary,
         fontSize: FONT_SIZE.m,
         fontWeight: '700',
         textTransform: 'uppercase',
         letterSpacing: 1.2,
-    },
-    closeButton: {
+        },
+        closeButton: {
         width: 32,
         height: 32,
         borderRadius: 16,
         backgroundColor: colors.border,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-    sectionLabel: {
+        },
+        sectionLabel: {
         color: colors.primary,
         fontSize: FONT_SIZE.s,
         fontWeight: '700',
@@ -264,28 +287,32 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
         marginBottom: SPACING.m,
         textTransform: 'uppercase',
         letterSpacing: 0.5,
-    },
-    row: {
+        },
+        row: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingVertical: SPACING.s,
-    },
-    rowTextWrap: {
+        },
+        rowTextWrap: {
         flex: 1,
         paddingRight: SPACING.m,
-    },
-    rowTitle: {
+        },
+        rowTitle: {
         color: colors.text,
         fontSize: FONT_SIZE.m,
         fontWeight: '600',
         marginBottom: 2,
-    },
-    rowSubtitle: {
+        },
+        rowSubtitle: {
         color: colors.subtext,
         fontSize: FONT_SIZE.s,
         fontWeight: '400',
-    },
-});
+        },
+        bottomSpacer: {
+        height: SPACING.s,
+        },
+    });
+};
 
 export default ControlSettingsPanel;

@@ -169,7 +169,7 @@ const PlayerScreen = () => {
     const { width, height } = useWindowDimensions();
     const isIncognito = useSettingsStore((state) => state.isIncognito);
     const isLandscape = width > height;
-    const initialResumeSeconds = Math.max(0, initialResumePositionMillis) / 1000;
+    const initialResumeSeconds = forcePlayFromStart ? 0 : Math.max(0, initialResumePositionMillis) / 1000;
     const player = useVideoPlayer({ uri: videoUri }, (instance) => {
         instance.loop = false;
         instance.timeUpdateEventInterval = 0.25;
@@ -180,8 +180,9 @@ const PlayerScreen = () => {
             } catch {
                 // Some backends may not allow early seek before loaded; fallback path handles it.
             }
+        } else {
+            instance.play();
         }
-        instance.play();
     });
 
     const hideControlsTimeout = useRef<NodeJS.Timeout | null>(null);
@@ -262,6 +263,7 @@ const PlayerScreen = () => {
     const skipNextPiPExitAutoStopRef = useRef(false);
     const hasEverEnteredPiPRef = useRef(false);
     const appStateRef = useRef(AppState.currentState);
+    const shouldDismissPlayerOnNextActiveRef = useRef(false);
     const initialSeekTargetMsRef = useRef(0);
     const initialSeekRevealTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const floatingToggleInFlightRef = useRef(false);
@@ -427,7 +429,11 @@ const PlayerScreen = () => {
         }
 
         const currentMillis = Math.max(0, Math.floor((player.currentTime || 0) * 1000));
-        if (Math.abs(currentMillis - resumePosition) > 1200) {
+        const resumeDelta = currentMillis - resumePosition;
+        if (resumeDelta >= 0 && resumeDelta <= 2500) {
+            return;
+        }
+        if (Math.abs(resumeDelta) > 1200) {
             player.currentTime = resumePosition / 1000;
         }
         beginInitialPlaybackReveal();
@@ -441,6 +447,7 @@ const PlayerScreen = () => {
 
     useEffect(() => {
         isClosingScreenRef.current = false;
+        shouldDismissPlayerOnNextActiveRef.current = false;
         screenScaleAnim.setValue(1);
     }, [videoUri, screenScaleAnim]);
 
@@ -645,6 +652,39 @@ const PlayerScreen = () => {
         setZoomPanelVisible(false);
         setVolumePanelVisible(false);
         setEqualizerPanelVisible(false);
+        setControlSettingsVisible(false);
+        setVideoTipsVisible(false);
+    };
+
+    const openControlSettingsPanel = () => {
+        setControlSettingsVisible(true);
+        setMorePanelVisible(false);
+        setAdvancedPanelVisible(false);
+        setAudioPanelVisible(false);
+        setZoomPanelVisible(false);
+        setVolumePanelVisible(false);
+        setEqualizerPanelVisible(false);
+        setVideoTipsVisible(false);
+    };
+
+    const openVideoTipsPanel = () => {
+        setVideoTipsVisible(true);
+        setMorePanelVisible(false);
+        setAdvancedPanelVisible(false);
+        setAudioPanelVisible(false);
+        setZoomPanelVisible(false);
+        setVolumePanelVisible(false);
+        setEqualizerPanelVisible(false);
+        setControlSettingsVisible(false);
+    };
+
+    const openEqualizerPanel = () => {
+        setEqualizerPanelVisible(true);
+        setMorePanelVisible(false);
+        setAdvancedPanelVisible(false);
+        setAudioPanelVisible(false);
+        setZoomPanelVisible(false);
+        setVolumePanelVisible(false);
         setControlSettingsVisible(false);
         setVideoTipsVisible(false);
     };
@@ -2539,6 +2579,16 @@ const PlayerScreen = () => {
         }
     };
 
+    const dismissPlayerRoute = useCallback(() => {
+        if (isClosingScreenRef.current) return;
+        isClosingScreenRef.current = true;
+        if (navigation.canGoBack()) {
+            navigation.goBack();
+        } else {
+            navigation.replace('Main');
+        }
+    }, [navigation]);
+
     const stopPlaybackCompletely = () => {
         try {
             player.pause();
@@ -2584,9 +2634,106 @@ const PlayerScreen = () => {
             });
     };
 
+    const terminatePlaybackSession = (fallbackPositionMs?: number) => {
+        const positionMs = resolvePlaybackPositionMillis(fallbackPositionMs);
+        clearPiPEntryWatchdog();
+        clearPiPCloseTimeout();
+        shouldDismissPlayerOnNextActiveRef.current = appStateRef.current !== 'active';
+        try {
+            player.staysActiveInBackground = false;
+        } catch {
+            // Ignore unsupported background flag updates.
+        }
+        stopPlaybackCompletely();
+        try {
+            player.replace(null, true);
+        } catch {
+            void player.replaceAsync(null).catch(() => {
+                // Best-effort source unload.
+            });
+        }
+        statusRef.current = {
+            ...statusRef.current,
+            isLoaded: false,
+            isPlaying: false,
+            positionMillis: positionMs,
+            didJustFinish: false,
+        };
+        setStatus((prev) => ({
+            ...prev,
+            isLoaded: false,
+            isPlaying: false,
+            positionMillis: positionMs,
+            didJustFinish: false,
+        }));
+        void persistResumeCheckpoint(positionMs).catch(() => {
+            // Best effort only.
+        });
+    };
+
+    const handlePiPClosed = (fallbackPositionMs?: number) => {
+        terminatePlaybackSession(fallbackPositionMs);
+        if (appStateRef.current === 'active') {
+            dismissPlayerRoute();
+        }
+    };
+
+    const finalizePiPActivated = (showFeedback = false) => {
+        clearPiPCloseTimeout();
+        shouldDismissPlayerOnNextActiveRef.current = false;
+        hasEverEnteredPiPRef.current = true;
+        pipEnteredRef.current = true;
+        pipEntryPendingRef.current = false;
+        if (pipEntryTimeout.current) {
+            clearTimeout(pipEntryTimeout.current);
+            pipEntryTimeout.current = null;
+        }
+        setPopUpMode(true);
+        updateFloatingTransitionState('active', 1300);
+        hideOverlayControls();
+        if (showFeedback && appStateRef.current === 'active') {
+            flashSeekFeedback('Floating Mode Enabled');
+        }
+    };
+
+    const startPiPEntryWatchdog = () => {
+        if (pipEntryTimeout.current) {
+            clearTimeout(pipEntryTimeout.current);
+        }
+        pipEntryTimeout.current = setTimeout(() => {
+            void (async () => {
+                if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
+                const pipActive = await pictureInPictureService.isActive();
+                if (pipActive) {
+                    finalizePiPActivated(false);
+                    return;
+                }
+                clearPiPEntryWatchdog();
+                void pictureInPictureService.setAutoEnterEnabled(false);
+                setPopUpMode(false);
+                updateFloatingTransitionState('error', 1400);
+                void pictureInPictureService.bringAppToFront().catch(() => { });
+                void pictureInPictureService.isSupported().then(setPipSupported).catch(() => { });
+                if (hasEverEnteredPiPRef.current) {
+                    flashSeekFeedback('PiP unavailable right now');
+                } else {
+                    showPiPBlockedPrompt('PiP could not be started right now on this device.');
+                }
+                showOverlayControls();
+                resetControlsTimer();
+            })();
+        }, 1800);
+    };
+
+    const resolvePiPExit = (fallbackPositionMs?: number) => {
+        clearPiPCloseTimeout();
+        pipExitCloseTimeoutRef.current = setTimeout(() => {
+            pipExitCloseTimeoutRef.current = null;
+            handlePiPClosed(fallbackPositionMs);
+        }, 700);
+    };
+
     const handleClosePlayer = useCallback(() => {
-        if (isClosingScreenRef.current) return;
-        isClosingScreenRef.current = true;
         const fallbackPositionMs = resolvePlaybackPositionMillis(statusRef.current.positionMillis);
         clearPiPCloseTimeout();
         clearInitialSeekRevealTimeout();
@@ -2605,12 +2752,8 @@ const PlayerScreen = () => {
         } else {
             void persistResumeCheckpoint(fallbackPositionMs);
         }
-        if (navigation.canGoBack()) {
-            navigation.goBack();
-        } else {
-            navigation.replace('Main');
-        }
-    }, [navigation]);
+        dismissPlayerRoute();
+    }, [dismissPlayerRoute]);
 
     const seekByFromPiPAction = (deltaMs: number) => {
         if (!statusRef.current.isLoaded) return;
@@ -2724,22 +2867,7 @@ const PlayerScreen = () => {
                 updateFloatingTransitionState('active', 1300);
                 hideOverlayControls();
                 await pictureInPictureService.setAutoEnterEnabled(true);
-                pipEntryTimeout.current = setTimeout(() => {
-                    if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
-                    clearPiPEntryWatchdog();
-                    void pictureInPictureService.setAutoEnterEnabled(false);
-                    setPopUpMode(false);
-                    updateFloatingTransitionState('error', 1400);
-                    void pictureInPictureService.bringAppToFront().catch(() => { });
-                    void pictureInPictureService.isSupported().then(setPipSupported).catch(() => { });
-                    if (hasEverEnteredPiPRef.current) {
-                        flashSeekFeedback('PiP unavailable right now');
-                    } else {
-                        showPiPBlockedPrompt('PiP could not be started on this device right now.');
-                    }
-                    showOverlayControls();
-                    resetControlsTimer();
-                }, 1800);
+                startPiPEntryWatchdog();
             } catch {
                 try {
                     await new Promise((resolve) => setTimeout(resolve, 180));
@@ -2748,21 +2876,7 @@ const PlayerScreen = () => {
                     updateFloatingTransitionState('active', 1300);
                     hideOverlayControls();
                     await pictureInPictureService.setAutoEnterEnabled(true);
-                    pipEntryTimeout.current = setTimeout(() => {
-                        if (!pipEntryPendingRef.current || pipEnteredRef.current) return;
-                        clearPiPEntryWatchdog();
-                        void pictureInPictureService.setAutoEnterEnabled(false);
-                        setPopUpMode(false);
-                        updateFloatingTransitionState('error', 1400);
-                        void pictureInPictureService.bringAppToFront().catch(() => { });
-                        if (hasEverEnteredPiPRef.current) {
-                            flashSeekFeedback('PiP unavailable right now');
-                        } else {
-                            showPiPBlockedPrompt('PiP could not be started on this device right now.');
-                        }
-                        showOverlayControls();
-                        resetControlsTimer();
-                    }, 1800);
+                    startPiPEntryWatchdog();
                     return;
                 } catch {
                     await pictureInPictureService.setAutoEnterEnabled(false);
@@ -2864,13 +2978,7 @@ const PlayerScreen = () => {
     };
 
     const cycleEqualizerMode = () => {
-        setEqualizerPanelVisible(true);
-        setMorePanelVisible(false);
-        setAdvancedPanelVisible(false);
-        setAudioPanelVisible(false);
-        setZoomPanelVisible(false);
-        setControlSettingsVisible(false);
-        setVideoTipsVisible(false);
+        openEqualizerPanel();
     };
 
     const cycleSleepTimer = () => {
@@ -2982,18 +3090,35 @@ const PlayerScreen = () => {
         const sub = AppState.addEventListener('change', (state) => {
             appStateRef.current = state;
             if (state === 'active') {
-                clearPiPCloseTimeout();
+                if (shouldDismissPlayerOnNextActiveRef.current) {
+                    shouldDismissPlayerOnNextActiveRef.current = false;
+                    dismissPlayerRoute();
+                    return;
+                }
+                if (pipExitCloseTimeoutRef.current) {
+                    clearPiPCloseTimeout();
+                    showOverlayControls();
+                    resetControlsTimer();
+                }
             }
             if (state !== 'background') return;
             // Only retry on explicit PiP entry attempt; avoid unsolicited re-entry loops.
             if (!pipEntryPendingRef.current) return;
             if (!statusRef.current.isLoaded) return;
-            void pictureInPictureService.enter(16, 9, statusRef.current.isPlaying).catch(() => { });
+            void pictureInPictureService.isActive()
+                .then((active) => {
+                    if (active) {
+                        finalizePiPActivated(false);
+                        return;
+                    }
+                    return pictureInPictureService.enter(16, 9, statusRef.current.isPlaying);
+                })
+                .catch(() => { });
         });
         return () => {
             sub.remove();
         };
-    }, []);
+    }, [dismissPlayerRoute]);
 
     useEffect(() => {
         if (!USE_SYSTEM_PIP) return;
@@ -3049,7 +3174,7 @@ const PlayerScreen = () => {
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
                     void pictureInPictureService.setAutoEnterEnabled(false);
-                    stopAndPersistResume();
+                    handlePiPClosed();
                     return;
                 case 'app.mcai.videoplayer.pip.SETTINGS':
                     clearPiPEntryWatchdog();
@@ -3060,18 +3185,7 @@ const PlayerScreen = () => {
                     void openPiPSettings();
                     return;
                 case 'app.mcai.videoplayer.pip.STATE_ENTERED':
-                    clearPiPCloseTimeout();
-                    hasEverEnteredPiPRef.current = true;
-                    pipEnteredRef.current = true;
-                    pipEntryPendingRef.current = false;
-                    if (pipEntryTimeout.current) {
-                        clearTimeout(pipEntryTimeout.current);
-                        pipEntryTimeout.current = null;
-                    }
-                    setPopUpMode(true);
-                    updateFloatingTransitionState('active', 1300);
-                    hideOverlayControls();
-                    flashSeekFeedback('Floating Mode Enabled');
+                    finalizePiPActivated(true);
                     return;
                 case 'app.mcai.videoplayer.pip.STATE_EXITED':
                     clearPiPEntryWatchdog();
@@ -3079,13 +3193,26 @@ const PlayerScreen = () => {
                     setPopUpMode(false);
                     updateFloatingTransitionState('idle');
                     void pictureInPictureService.setAutoEnterEnabled(false);
-                    showOverlayControls();
-                    resetControlsTimer();
                     if (skipNextPiPExitAutoStopRef.current) {
                         skipNextPiPExitAutoStopRef.current = false;
+                        showOverlayControls();
+                        resetControlsTimer();
                         return;
                     }
-                    stopAndPersistResume();
+                    if (appStateRef.current === 'active') {
+                        showOverlayControls();
+                        resetControlsTimer();
+                        return;
+                    }
+                    resolvePiPExit(resolvePlaybackPositionMillis(statusRef.current.positionMillis));
+                    return;
+                case 'app.mcai.videoplayer.app.DESTROYED':
+                    clearPiPEntryWatchdog();
+                    clearPiPCloseTimeout();
+                    setPopUpMode(false);
+                    updateFloatingTransitionState('idle');
+                    void pictureInPictureService.setAutoEnterEnabled(false);
+                    handlePiPClosed(resolvePlaybackPositionMillis(statusRef.current.positionMillis));
                     return;
                 default:
                     return;
@@ -3142,9 +3269,7 @@ const PlayerScreen = () => {
                         player.currentTime = positionMs / 1000;
                     }
                     void pictureInPictureService.setAutoEnterEnabled(false);
-                    showOverlayControls();
-                    resetControlsTimer();
-                    stopAndPersistResume(positionMs);
+                    handlePiPClosed(positionMs);
                     return;
                 }
             }
@@ -3309,6 +3434,36 @@ const PlayerScreen = () => {
     );
     const advancedPanelMaxHeight = isLandscape ? landscapePanelMaxHeight : Math.max(320, Math.floor(height * 0.68));
     const advancedPanelWidth = isLandscape ? Math.min(360, Math.max(270, Math.floor(width * 0.44))) : 280;
+    const landscapeOverlayTop = Math.max((insets.top || 0) + 28, 24);
+    const landscapeOverlayHeight = Math.max(
+        260,
+        Math.min(
+            Math.floor(height * 0.78),
+            height - ((insets.top || 0) + (insets.bottom || 0) + 72)
+        )
+    );
+    const landscapeSidePanelWidth = Math.min(420, Math.max(320, Math.floor(width * 0.48)));
+    const landscapeWidePanelWidth = Math.min(640, Math.max(420, Math.floor(width * 0.72)));
+    const sidePanelFrameStyle = isLandscape
+        ? {
+            top: landscapeOverlayTop,
+            bottom: undefined,
+            height: landscapeOverlayHeight,
+            width: landscapeSidePanelWidth,
+        }
+        : {
+            width: advancedPanelWidth,
+            maxHeight: advancedPanelMaxHeight,
+        };
+    const audioSubtitleSheetFrameStyle = isLandscape
+        ? {
+            top: landscapeOverlayTop,
+            bottom: undefined,
+            left: SPACING.m + (insets?.left || 0),
+            right: SPACING.m + (insets?.right || 0),
+            height: landscapeOverlayHeight,
+        }
+        : null;
     const maxVolumeLevel = playerSettings.audioBoostEnabled ? 2 : 1;
     const sliderMaxMillis = Math.max(stableDurationMillis, status.durationMillis || 0, 1);
     const livePositionMillis = status.positionMillis || statusRef.current.positionMillis || 0;
@@ -3692,8 +3847,11 @@ const PlayerScreen = () => {
                                         styles.bottomPanel,
                                         styles.rightPanel,
                                         {
-                                            width: Math.min(320, advancedPanelWidth),
-                                            maxHeight: advancedPanelMaxHeight,
+                                            width: isLandscape ? Math.min(360, landscapeSidePanelWidth) : Math.min(320, advancedPanelWidth),
+                                            height: isLandscape ? landscapeOverlayHeight : undefined,
+                                            maxHeight: isLandscape ? landscapeOverlayHeight : advancedPanelMaxHeight,
+                                            top: isLandscape ? landscapeOverlayTop : undefined,
+                                            bottom: isLandscape ? undefined : 108 + (insets?.bottom || 0),
                                         },
                                         {
                                             opacity: zoomPanelAnim,
@@ -3743,6 +3901,13 @@ const PlayerScreen = () => {
                                         styles.bottomPanel,
                                         styles.leftPanel,
                                         {
+                                            height: isLandscape ? landscapeOverlayHeight : undefined,
+                                            maxHeight: isLandscape ? landscapeOverlayHeight : undefined,
+                                            top: isLandscape ? landscapeOverlayTop : undefined,
+                                            bottom: isLandscape ? undefined : 108 + (insets?.bottom || 0),
+                                            width: isLandscape ? landscapeSidePanelWidth : undefined,
+                                        },
+                                        {
                                             opacity: volumePanelAnim,
                                             transform: [
                                                 {
@@ -3786,6 +3951,7 @@ const PlayerScreen = () => {
                                 <Animated.View
                                     style={[
                                         styles.audioSubtitleSheet,
+                                        audioSubtitleSheetFrameStyle,
                                         {
                                             opacity: audioPanelAnim,
                                             transform: [
@@ -3928,10 +4094,7 @@ const PlayerScreen = () => {
                                     style={[
                                         styles.bottomPanel,
                                         styles.rightPanel,
-                                        {
-                                            width: advancedPanelWidth,
-                                            maxHeight: advancedPanelMaxHeight,
-                                        },
+                                        sidePanelFrameStyle,
                                         {
                                             opacity: morePanelAnim,
                                             transform: [
@@ -4073,20 +4236,14 @@ const PlayerScreen = () => {
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={styles.panelItem}
-                                            onPress={() => {
-                                                setControlSettingsVisible(true);
-                                                setMorePanelVisible(false);
-                                            }}
+                                            onPress={openControlSettingsPanel}
                                         >
                                             <Ionicons name="settings-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>Control settings</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={styles.panelItem}
-                                            onPress={() => {
-                                                setVideoTipsVisible(true);
-                                                setMorePanelVisible(false);
-                                            }}
+                                            onPress={openVideoTipsPanel}
                                         >
                                             <Ionicons name="sparkles-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>Video player tips</Text>
@@ -4117,6 +4274,10 @@ const PlayerScreen = () => {
                                     style={[
                                         styles.advancedFloatingPanel,
                                         isLandscape && styles.advancedFloatingPanelLandscape,
+                                        isLandscape && {
+                                            width: landscapeWidePanelWidth,
+                                            maxHeight: landscapeOverlayHeight,
+                                        },
                                         {
                                             opacity: advancedPanelAnim,
                                             transform: [
@@ -4154,6 +4315,14 @@ const PlayerScreen = () => {
                                         <TouchableOpacity style={styles.advancedChip} onPress={openAdvancedControlsPanel}>
                                             <Ionicons name="speedometer-outline" size={16} color={colors.white} />
                                             <Text style={styles.advancedChipText}>Speed</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity style={styles.advancedChip} onPress={openEqualizerPanel}>
+                                            <Ionicons name="options-outline" size={16} color={colors.white} />
+                                            <Text style={styles.advancedChipText}>Equalizer</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity style={styles.advancedChip} onPress={openControlSettingsPanel}>
+                                            <Ionicons name="settings-outline" size={16} color={colors.white} />
+                                            <Text style={styles.advancedChipText}>Settings</Text>
                                         </TouchableOpacity>
                                     </View>
                                     <View style={styles.speedRow}>
@@ -4809,6 +4978,7 @@ const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
         shadowOpacity: 0.55,
         shadowRadius: 16,
         zIndex: 18,
+        overflow: 'hidden',
     },
     leftPanel: {
         left: SPACING.m + (insets?.left || 0),
@@ -4818,6 +4988,7 @@ const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
     },
     morePanelScroll: {
         flex: 1,
+        minHeight: 0,
     },
     morePanelScrollContent: {
         paddingBottom: SPACING.xs,
@@ -4890,6 +5061,7 @@ const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
         shadowOffset: { width: 0, height: 10 },
         shadowOpacity: 0.6,
         shadowRadius: 20,
+        overflow: 'hidden',
     },
     sheetHandle: {
         alignSelf: 'center',
@@ -4900,6 +5072,8 @@ const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
         marginBottom: SPACING.s,
     },
     audioSubtitleScroll: {
+        flex: 1,
+        minHeight: 0,
         paddingHorizontal: SPACING.m,
     },
     sectionHeader: {

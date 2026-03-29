@@ -1,6 +1,5 @@
 ﻿import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
-import { ThemePreference } from '../context/ThemeContext';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/types';
@@ -13,24 +12,11 @@ import { useThemeContext } from '../context/ThemeContext';
 const MoreScreen = () => {
     const {
         colors,
-        resolvedTheme,
         systemTheme,
-        themePreference,
-        isSystemThemeSelected,
-        setThemePreference,
     } = useThemeContext();
 
-    const themeOptions: { label: string; value: ThemePreference }[] = [
-        { label: 'Light', value: 'light' },
-        { label: 'System', value: 'system' },
-        { label: 'Dark', value: 'dark' },
-    ];
-
-    const themeIcon = resolvedTheme === 'dark' ? 'moon' : 'sunny';
-    const activeThemeOption = themePreference === 'system' ? resolvedTheme : themePreference;
-    const themeStatusText = isSystemThemeSelected
-        ? `System selected • Following ${systemTheme === 'dark' ? 'Dark' : 'Light'}`
-        : `Using ${resolvedTheme === 'dark' ? 'Dark' : 'Light'} mode`;
+    const themeIcon = systemTheme === 'dark' ? 'moon' : 'sunny';
+    const themeStatusText = `Following ${systemTheme === 'dark' ? 'Dark' : 'Light'} mode`;
     const insets = useSafeAreaInsets();
     const navigation = useNavigation<StackNavigationProp<RootStackParamList>>();
     const styles = useStyles(colors, insets);
@@ -38,17 +24,29 @@ const MoreScreen = () => {
         Alert.alert('Coming Soon', `${feature} will be available in a future update.`);
     };
 
-    const SettingRow = ({ icon, label, rightElement, onPress }: any) => (
-        <TouchableOpacity style={styles.row} onPress={onPress}>
-            <View style={styles.rowLeft}>
-                <Ionicons name={icon} size={22} color={colors.primary} style={styles.rowIcon} />
-                <Text style={styles.rowLabel}>{label}</Text>
-            </View>
-            {rightElement ? rightElement : (
-                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-            )}
-        </TouchableOpacity>
-    );
+    const SettingRow = ({ icon, label, rightElement, onPress }: any) => {
+        const content = (
+            <>
+                <View style={styles.rowLeft}>
+                    <Ionicons name={icon} size={22} color={colors.primary} style={styles.rowIcon} />
+                    <Text style={styles.rowLabel}>{label}</Text>
+                </View>
+                {rightElement ? rightElement : (
+                    <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+                )}
+            </>
+        );
+
+        if (!onPress) {
+            return <View style={styles.row}>{content}</View>;
+        }
+
+        return (
+            <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
+                {content}
+            </TouchableOpacity>
+        );
+    };
 
     return (
         <View style={styles.container}>
@@ -63,32 +61,9 @@ const MoreScreen = () => {
                         icon={themeIcon}
                         label="Appearance"
                         rightElement={
-                            <View style={styles.themeControl}>
-                                <View style={styles.segmentContainer}>
-                                    {themeOptions.map((option, idx) => {
-                                        const isActive = option.value === activeThemeOption;
-
-                                        return (
-                                            <TouchableOpacity
-                                                key={option.value}
-                                                style={[
-                                                    styles.segmentOption,
-                                                    isActive && styles.segmentOptionActive,
-                                                    idx === 0 && styles.segmentFirst,
-                                                    idx === themeOptions.length - 1 && styles.segmentLast,
-                                                ]}
-                                                onPress={() => setThemePreference(option.value)}
-                                                activeOpacity={0.7}
-                                            >
-                                                <Text style={[
-                                                    styles.segmentText,
-                                                    isActive && styles.segmentTextActive,
-                                                ]}>
-                                                    {option.label}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        );
-                                    })}
+                            <View style={styles.themeSummary}>
+                                <View style={styles.systemBadge}>
+                                    <Text style={styles.systemBadgeText}>System default</Text>
                                 </View>
                                 <Text style={styles.themeStatusText}>{themeStatusText}</Text>
                             </View>
@@ -241,7 +216,7 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         fontSize: FONT_SIZE.xs,
         marginTop: 4,
     },
-    themeControl: {
+    themeSummary: {
         alignItems: 'flex-end',
     },
     themeStatusText: {
@@ -250,38 +225,18 @@ const useStyles = (colors: any, insets: any) => StyleSheet.create({
         fontSize: FONT_SIZE.xxs,
         fontWeight: FONT_WEIGHT.medium,
     },
-    segmentContainer: {
-        flexDirection: 'row',
+    systemBadge: {
         borderRadius: RADIUS.s,
         borderWidth: 1,
         borderColor: colors.borderSubtle,
-        overflow: 'hidden',
         backgroundColor: colors.background,
-    },
-    segmentOption: {
         paddingVertical: 5,
         paddingHorizontal: 10,
-        backgroundColor: 'transparent',
     },
-    segmentOptionActive: {
-        backgroundColor: colors.primary,
-    },
-    segmentFirst: {
-        borderTopLeftRadius: RADIUS.s,
-        borderBottomLeftRadius: RADIUS.s,
-    },
-    segmentLast: {
-        borderTopRightRadius: RADIUS.s,
-        borderBottomRightRadius: RADIUS.s,
-    },
-    segmentText: {
+    systemBadgeText: {
         fontSize: FONT_SIZE.xs,
         fontWeight: FONT_WEIGHT.medium,
         color: colors.textSecondary,
-    },
-    segmentTextActive: {
-        color: colors.white,
-        fontWeight: FONT_WEIGHT.bold,
     },
 });
 

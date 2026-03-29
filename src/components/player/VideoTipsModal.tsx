@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View, ScrollView, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -26,11 +26,17 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
     const { colors } = useThemeContext();
     const { width, height } = useWindowDimensions();
     const isLandscape = width > height;
-    const styles = useStyles(colors, isLandscape, height);
+    const styles = useStyles(colors, isLandscape, height, width);
 
     const [index, setIndex] = useState(0);
     const item = useMemo(() => TIPS[index] || TIPS[0], [index]);
     const last = index === TIPS.length - 1;
+
+    useEffect(() => {
+        if (visible) {
+            setIndex(0);
+        }
+    }, [visible]);
 
     const handleNext = () => {
         if (last) {
@@ -52,14 +58,16 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
                         </TouchableOpacity>
                     </View>
 
-                    <ScrollView
-                        contentContainerStyle={styles.contentScroll}
-                        style={styles.contentBase}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <Text style={styles.tipTitle}>{item.title}</Text>
-                        <Text style={styles.tipBody}>{item.body}</Text>
-                    </ScrollView>
+                    <View style={styles.body}>
+                        <ScrollView
+                            contentContainerStyle={styles.contentScroll}
+                            style={styles.contentBase}
+                            showsVerticalScrollIndicator={false}
+                        >
+                            <Text style={styles.tipTitle}>{item.title}</Text>
+                            <Text style={styles.tipBody}>{item.body}</Text>
+                        </ScrollView>
+                    </View>
 
                     <View style={styles.footer}>
                         <View style={styles.dots}>
@@ -80,7 +88,11 @@ const VideoTipsModal = ({ visible, onClose }: Props) => {
     );
 };
 
-const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => StyleSheet.create({
+const useStyles = (colors: any, isLandscape: boolean, screenHeight: number, screenWidth: number) => {
+    const sheetHeight = Math.min(screenHeight * (isLandscape ? 0.82 : 0.72), isLandscape ? 520 : 560);
+    const landscapeWidth = Math.min(screenWidth * 0.65, 520);
+
+    return StyleSheet.create({
     backdrop: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.65)',
@@ -89,19 +101,25 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
         alignItems: 'center',
     },
     sheet: {
+        height: sheetHeight,
         borderRadius: 20,
         backgroundColor: colors.surface,
         borderWidth: 1,
         borderColor: colors.border,
         padding: isLandscape ? SPACING.m : SPACING.l,
-        width: isLandscape ? '65%' : '100%',
+        width: isLandscape ? landscapeWidth : '100%',
         maxWidth: 480,
-        maxHeight: isLandscape ? screenHeight * 0.92 : '90%',
+        maxHeight: sheetHeight,
         elevation: 24,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 12 },
         shadowOpacity: 0.3,
         shadowRadius: 24,
+        overflow: 'hidden',
+    },
+    body: {
+        flex: 1,
+        minHeight: 0,
     },
     header: {
         flexDirection: 'row',
@@ -126,9 +144,11 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
     },
     contentBase: {
         flex: 1,
+        minHeight: 0,
         marginVertical: isLandscape ? SPACING.xs : SPACING.m,
     },
     contentScroll: {
+        flexGrow: 1,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: SPACING.s,
@@ -184,5 +204,6 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
         fontWeight: '700',
     },
 });
+};
 
 export default VideoTipsModal;

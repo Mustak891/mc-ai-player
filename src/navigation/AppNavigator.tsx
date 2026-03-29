@@ -128,7 +128,7 @@ const AppNavigator = () => {
                     navigateToExternalVideo(pendingUrl);
                 }}
             >
-                <StatusBar style={isDark ? "light" : "dark"} translucent={true} backgroundColor="transparent" />
+                <StatusBar style={isDark ? "light" : "dark"} />
                 <Stack.Navigator
                     screenOptions={{
                         headerShown: false,
@@ -142,7 +142,7 @@ const AppNavigator = () => {
                         options={{
                             presentation: 'card',
                             gestureEnabled: false,
-                            detachPreviousScreen: false,
+                            detachPreviousScreen: true,
                             cardStyle: { backgroundColor: '#000' },
                             animation: 'none',
                             cardStyleInterpolator: CardStyleInterpolators.forNoAnimation,

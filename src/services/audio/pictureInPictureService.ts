@@ -3,6 +3,7 @@ import { Linking, NativeModules, Platform } from 'react-native';
 type PiPModule = {
     isSupported: () => Promise<boolean>;
     isPermissionEnabled?: () => Promise<boolean>;
+    isActive?: () => Promise<boolean>;
     setAutoEnterEnabled: (enabled: boolean) => Promise<void>;
     enter: (width: number, height: number, isPlaying: boolean) => Promise<void>;
     updateActions: (isPlaying: boolean) => Promise<void>;
@@ -55,6 +56,17 @@ export const pictureInPictureService = {
             return await mod.isPermissionEnabled();
         } catch {
             return true;
+        }
+    },
+
+    async isActive(): Promise<boolean> {
+        if (Platform.OS !== 'android') return false;
+        const mod = getModule();
+        if (!mod?.isActive) return false;
+        try {
+            return await mod.isActive();
+        } catch {
+            return false;
         }
     },
 

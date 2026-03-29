@@ -25,9 +25,9 @@ export const useVideoLibrary = (lazy: boolean = false) => {
         hasRequestedRef.current = true;
 
         const init = async () => {
-            let granted = await checkStoragePermission();
+            let granted = await checkStoragePermission('video');
             if (!granted) {
-                granted = await requestStoragePermission();
+                granted = await requestStoragePermission('video');
             }
             if (isMounted) setHasPermission(granted);
         };
@@ -50,12 +50,16 @@ export const useVideoLibrary = (lazy: boolean = false) => {
             const media = await MediaLibrary.getAssetsAsync({
                 mediaType: MediaLibrary.MediaType.video,
                 first: 100,
-                sortBy: [MediaLibrary.SortBy.creationTime],
+                sortBy: [[MediaLibrary.SortBy.creationTime, false]],
             });
             setVideos(media.assets);
         } catch (error) {
             console.error('Error fetching videos:', error);
-            Alert.alert('Error', 'Failed to load videos.');
+            const details =
+                error instanceof Error && error.message
+                    ? error.message
+                    : 'Failed to load videos from your device.';
+            Alert.alert('Video Library Error', details);
         } finally {
             setIsLoading(false);
             fetchingRef.current = false;
@@ -67,7 +71,7 @@ export const useVideoLibrary = (lazy: boolean = false) => {
     useEffect(() => {
         const handleAppStateChange = (nextState: AppStateStatus) => {
             if (nextState === 'active') {
-                void checkStoragePermission().then(granted => {
+                void checkStoragePermission('video').then(granted => {
                     setHasPermission(granted);
                 });
             }
@@ -85,7 +89,7 @@ export const useVideoLibrary = (lazy: boolean = false) => {
     }, [hasPermission, lazy, fetchVideos]);
 
     const requestPermission = useCallback(async () => {
-        const granted = await requestStoragePermission();
+        const granted = await requestStoragePermission('video');
         setHasPermission(granted);
         return { granted, canAskAgain: true, status: granted ? 'granted' : 'denied' };
     }, []);

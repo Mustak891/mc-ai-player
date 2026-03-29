@@ -14,6 +14,15 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  private fun emitPlayerLifecycleEvent(eventName: String) {
+      (application as? com.facebook.react.ReactApplication)
+          ?.reactNativeHost
+          ?.reactInstanceManager
+          ?.currentReactContext
+          ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+          ?.emit("McAiPiPAction", eventName)
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
@@ -75,9 +84,22 @@ class MainActivity : ReactActivity() {
       } else {
           "app.mcai.videoplayer.pip.STATE_EXITED"
       }
-      (application as com.facebook.react.ReactApplication)
-          .reactNativeHost.reactInstanceManager.currentReactContext
-          ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-          ?.emit("McAiPiPAction", eventName)
+      emitPlayerLifecycleEvent(eventName)
+  }
+
+  override fun onTrimMemory(level: Int) {
+      super.onTrimMemory(level)
+      if (level >= TRIM_MEMORY_RUNNING_LOW) {
+          // Explicitly hint to the JVM that it's a good time to collect
+          // if the system is under memory pressure.
+          System.gc()
+      }
+  }
+
+  override fun onDestroy() {
+      if (isFinishing) {
+          emitPlayerLifecycleEvent("app.mcai.videoplayer.app.DESTROYED")
+      }
+      super.onDestroy()
   }
 }

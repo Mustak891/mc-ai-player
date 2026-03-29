@@ -1,10 +1,10 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo } from 'react';
 import { Appearance, ColorSchemeName, useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LIGHT_COLORS, DARK_COLORS } from '../constants/theme';
 
 type ThemeColors = typeof DARK_COLORS;
-export type ThemePreference = 'light' | 'dark' | 'system';
+export type ThemePreference = 'system';
 export type ResolvedTheme = 'light' | 'dark';
 
 interface ThemeContextType {
@@ -36,44 +36,21 @@ const ThemeContext = createContext<ThemeContextType>({
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const systemColorScheme = useColorScheme();
-    const [themePreference, setThemePreferenceState] = useState<ThemePreference>('system');
-    const [isThemeReady, setIsThemeReady] = useState(false);
 
     useEffect(() => {
-        let isMounted = true;
-
-        AsyncStorage.getItem(THEME_STORAGE_KEY)
-            .then((saved) => {
-                if (!isMounted) return;
-                if (saved === 'light' || saved === 'dark' || saved === 'system') {
-                    setThemePreferenceState(saved);
-                    // Apply native appearance immediately so Android doesn't flash dark mode
-                    Appearance.setColorScheme(saved === 'system' ? null : saved);
-                }
-            })
-            .catch(() => {})
-            .finally(() => {
-                if (isMounted) {
-                    setIsThemeReady(true);
-                }
-            });
-
-        return () => {
-            isMounted = false;
-        };
+        // Manual theme overrides were removed, so always hand control back to the OS.
+        Appearance.setColorScheme(null);
+        AsyncStorage.removeItem(THEME_STORAGE_KEY).catch(() => {});
     }, []);
 
-    const setThemePreference = useCallback((preference: ThemePreference) => {
-        setThemePreferenceState(preference);
-        AsyncStorage.setItem(THEME_STORAGE_KEY, preference).catch(() => {});
-        // Sync the native Appearance layer. This ensures useColorScheme() and
-        // the NavigationContainer theme recalculate correctly, and prevents
-        // Android's OS-level forced dark mode from overriding our colors.
-        Appearance.setColorScheme(preference === 'system' ? null : preference);
+    const setThemePreference = useCallback((_preference: ThemePreference) => {
+        Appearance.setColorScheme(null);
+        AsyncStorage.removeItem(THEME_STORAGE_KEY).catch(() => {});
     }, []);
 
     const systemTheme = normalizeColorScheme(systemColorScheme);
-    const resolvedTheme = themePreference === 'system' ? systemTheme : themePreference;
+    const themePreference: ThemePreference = 'system';
+    const resolvedTheme = systemTheme;
     const isDark = resolvedTheme === 'dark';
     const colors = isDark ? DARK_COLORS : LIGHT_COLORS;
 
@@ -84,11 +61,11 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             themePreference,
             resolvedTheme,
             systemTheme,
-            isSystemThemeSelected: themePreference === 'system',
-            isThemeReady,
+            isSystemThemeSelected: true,
+            isThemeReady: true,
             setThemePreference,
         }),
-        [colors, isDark, isThemeReady, resolvedTheme, setThemePreference, systemTheme, themePreference]
+        [colors, isDark, resolvedTheme, setThemePreference, systemTheme]
     );
 
     return (

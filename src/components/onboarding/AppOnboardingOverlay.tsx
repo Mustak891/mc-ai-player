@@ -44,8 +44,8 @@ const PAGES = [
     },
     {
         key: 'theme',
-        title: 'Personalize It',
-        description: 'Make it yours with adaptive Dark and Light modes that sync perfectly with your system preferences.',
+        title: 'Always In Sync',
+        description: 'The app theme automatically follows your device Light or Dark appearance for a seamless experience.',
         icon: 'color-palette' as const,
         colors: ['rgba(245, 158, 11, 0.4)', 'rgba(16, 185, 129, 0.4)'],
     },

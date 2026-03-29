@@ -97,6 +97,19 @@ class McAiPictureInPictureModule(private val reactContext: ReactApplicationConte
     }
 
     @ReactMethod
+    fun isActive(promise: Promise) {
+        val activity = reactContext.currentActivity ?: run {
+            promise.resolve(false)
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            promise.resolve(false)
+            return
+        }
+        promise.resolve(activity.isInPictureInPictureMode)
+    }
+
+    @ReactMethod
     fun setAutoEnterEnabled(enabled: Boolean, promise: Promise) {
         val activity = reactContext.currentActivity ?: run { promise.resolve(null); return }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {

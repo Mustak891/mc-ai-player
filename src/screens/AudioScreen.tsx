@@ -48,9 +48,9 @@ const AudioScreen = () => {
     }, []);
 
     const loadAudioFiles = async () => {
-        let granted = await checkStoragePermission();
+        let granted = await checkStoragePermission('audio');
         if (!granted) {
-            granted = await requestStoragePermission();
+            granted = await requestStoragePermission('audio');
         }
         setHasPermission(granted);
         if (!granted) {

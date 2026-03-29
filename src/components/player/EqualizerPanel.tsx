@@ -220,12 +220,14 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
     },
     sheet: {
         backgroundColor: 'rgba(10,10,10,0.97)',
+        height: isLandscape ? screenHeight * 0.94 : undefined,
         borderRadius: isLandscape ? 16 : undefined,
         borderTopLeftRadius: isLandscape ? 16 : 16,
         borderTopRightRadius: isLandscape ? 16 : 16,
         padding: SPACING.m,
         maxHeight: isLandscape ? screenHeight * 0.94 : '84%',
         width: isLandscape ? '95%' : '100%',
+        overflow: 'hidden',
     },
     header: {
         flexDirection: 'row',
@@ -259,9 +261,11 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
         flexDirection: 'row',
         flex: 1,
         marginTop: SPACING.s,
+        minHeight: 0,
     },
     landscapeLeft: {
         flex: 1,
+        minHeight: 0,
     },
     landscapeDivider: {
         width: 1,
@@ -270,6 +274,7 @@ const useStyles = (colors: any, isLandscape: boolean, screenHeight: number) => S
     },
     landscapeRight: {
         flex: 1,
+        minHeight: 0,
     },
     presetRow: {
         marginTop: SPACING.m,
