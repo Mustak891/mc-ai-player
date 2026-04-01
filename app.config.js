@@ -106,7 +106,7 @@ module.exports = {
         },
         "extra": {
             "eas": {
-                "projectId": "f6010e19-92d1-4d38-9a94-6f5bbcbafcb0"
+                "projectId": "23d8d675-cd3e-4007-89d4-e5e4847fc447"
             },
             "geminiApiKey": process.env.GEMINI_API_KEY,
             "aiBackendUrl": process.env.AI_BACKEND_URL,
