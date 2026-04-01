@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -105,7 +105,7 @@ const MoreScreen = () => {
                     <SettingRow
                         icon="star"
                         label="Rate on Play Store"
-                        onPress={() => handlePlaceholder('Store rating')}
+                        onPress={() => Linking.openURL('https://play.google.com/store/apps/details?id=app.mcai.videoplayer').catch(() => handlePlaceholder('Store rating'))}
                     />
                     <View style={styles.divider} />
                     <SettingRow

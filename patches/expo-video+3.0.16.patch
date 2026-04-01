@@ -1,4 +1,4 @@
-diff --git a/node_modules/expo-video/android/build.gradle b/node_modules/expo-video/android/build.gradle
+﻿diff --git a/node_modules/expo-video/android/build.gradle b/node_modules/expo-video/android/build.gradle
 index f17d2d4..ee26fa9 100644
 --- a/node_modules/expo-video/android/build.gradle
 +++ b/node_modules/expo-video/android/build.gradle
@@ -49,3 +49,29 @@ index 1c7a55c..c4ae3cf 100644
      .setEnableDecoderFallback(true)
    private var listeners: MutableList<WeakReference<VideoPlayerListener>> = mutableListOf()
    private var currentPlayerView = MutableWeakReference<PlayerView?>(null)
+@@ -63,8 +88,9 @@ import java.lang.ref.WeakReference
+   val trackSelector = DefaultTrackSelector(context)
+ 
+   val player = ExoPlayer
+     .Builder(context, renderersFactory)
+     .setLooper(context.mainLooper)
++    .setTrackSelector(trackSelector)
+     .setLoadControl(loadControl)
+     .build()
+ 
+@@ -303,4 +329,15 @@ import java.lang.ref.WeakReference
+   init {
++    // Fix VFR (Variable Frame Rate) tolerance so CapCut and other
++    // editors producing non-constant frame rate streams play smoothly
++    // without aggressive frame drops. ExoPlayer's strict default threshold
++    // causes frame drops on VFR content; this relaxes it so the renderer
++    // adapts instead of discarding frames to compensate.
++    trackSelector.setParameters(
++      trackSelector.buildUponParameters()
++        .setAllowVideoMixedDecoderSupportAdaptiveness(true)
++        .build()
++    )
++
+     player.addListener(playerListener)
+     player.addAnalyticsListener(analyticsListener)
+     VideoManager.registerVideoPlayer(this)
