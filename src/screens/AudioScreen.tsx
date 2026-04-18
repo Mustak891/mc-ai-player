@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert, Platform, TouchableOpacity, Share, Linking } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { checkStoragePermission, requestStoragePermission } from '../utils/permissions';
@@ -9,9 +9,11 @@ import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../cons
 import { useThemeContext } from '../context/ThemeContext';
 import AudioRow from '../components/AudioRow';
 import MiniPlayer from '../components/MiniPlayer';
+import NativeFeedAdCard from '../components/NativeFeedAdCard';
 import MediaOptionsBottomSheet from '../components/MediaOptionsBottomSheet';
 import FileInfoModal from '../components/FileInfoModal';
 import * as Sharing from 'expo-sharing';
+import { adAnalytics } from '../services/ads/adAnalytics';
 
 interface AudioFile {
     id: string;
@@ -20,6 +22,10 @@ interface AudioFile {
     duration: number;
     modificationTime: number;
 }
+
+type AudioListItem =
+    | { type: 'audio'; key: string; audio: AudioFile }
+    | { type: 'ad'; key: string; slotId: string };
 
 const AudioScreen = () => {
     const { colors } = useThemeContext();
@@ -105,6 +111,68 @@ const AudioScreen = () => {
         setSound(null); setCurrentTrack(null); setIsPlaying(false); setPosition(0);
     };
 
+    const shouldRenderInlineAudioAd = hasPermission === true;
+    const audioAdSlots = useMemo(() => {
+        if (!shouldRenderInlineAudioAd) return [];
+
+        const slots: Array<{ slotId: string; insertAfterCount: number }> = [];
+        for (let insertAfterCount = 6; insertAfterCount < audioFiles.length; insertAfterCount += 6) {
+            const slotIndex = slots.length + 1;
+            slots.push({
+                slotId: `audio-library-inline-${slotIndex}`,
+                insertAfterCount,
+            });
+        }
+
+        return slots;
+    }, [audioFiles.length, shouldRenderInlineAudioAd]);
+
+    const audioListItems = useMemo<AudioListItem[]>(() => {
+        const mapped: AudioListItem[] = audioFiles.map((audio) => ({
+            type: 'audio',
+            key: `audio-${audio.id}`,
+            audio,
+        }));
+
+        audioAdSlots.forEach((slot, index) => {
+            const insertAt = Math.min(slot.insertAfterCount + index, mapped.length);
+            mapped.splice(insertAt, 0, {
+                type: 'ad',
+                key: `ad-${slot.slotId}`,
+                slotId: slot.slotId,
+            });
+        });
+
+        return mapped;
+    }, [audioAdSlots, audioFiles]);
+
+    const renderAudioItem = useCallback(({ item }: { item: AudioListItem }) => {
+        if (item.type === 'ad') {
+            adAnalytics.trackSlotRendered(item.slotId);
+            return <NativeFeedAdCard placement="audio-list" />;
+        }
+
+        return (
+            <AudioRow
+                item={item.audio}
+                isPlaying={currentTrack?.id === item.audio.id && isPlaying}
+                onPress={handleTrackPress}
+                onOptionsPress={setSelectedAudioMenu}
+            />
+        );
+    }, [currentTrack?.id, isPlaying]);
+
+    const audioKeyExtractor = useCallback((item: AudioListItem) => item.key, []);
+
+    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+    const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: AudioListItem }> }) => {
+        viewableItems.forEach((token) => {
+            if (token.item?.type === 'ad') {
+                adAnalytics.trackSlotViewable(token.item.slotId);
+            }
+        });
+    }).current;
+
     return (
         <View style={styles.container}>
             {/* Header */}
@@ -128,17 +196,12 @@ const AudioScreen = () => {
             )}
 
             <FlatList
-                data={audioFiles}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                    <AudioRow
-                        item={item}
-                        isPlaying={currentTrack?.id === item.id && isPlaying}
-                        onPress={handleTrackPress}
-                        onOptionsPress={setSelectedAudioMenu}
-                    />
-                )}
+                data={audioListItems}
+                keyExtractor={audioKeyExtractor}
+                renderItem={renderAudioItem}
                 contentContainerStyle={[styles.listContent, { paddingBottom: (currentTrack ? 100 : SPACING.xl) + insets.bottom }]}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
                 ListEmptyComponent={
                     <View style={styles.emptyState}>
                         <Ionicons name="musical-notes-outline" size={64} color={colors.textMuted} />

@@ -58,7 +58,7 @@ module.exports = function withFFmpegExoPlayer(config) {
 
         // We use Anil Beesetti's NextLib Media3 extension because it reliably builds the Dolby EAC3 and AC3 FFmpeg codecs natively.
         // We also explicitly include Media3 dependencies so they are visible to the main app's Kotlin source.
-        const media3Version = "1.3.1";
+        const media3Version = "1.8.0";
         const dependencyBlock = `    // Added by withFFmpegExoPlayer Config Plugin\n    implementation("androidx.media3:media3-exoplayer:${media3Version}")\n    implementation("androidx.media3:media3-ui:${media3Version}")\n    implementation("androidx.media3:media3-session:${media3Version}")\n    implementation("androidx.media3:media3-common:${media3Version}")\n    implementation("io.github.anilbeesetti:nextlib-media3ext:${media3Version}-0.9.0") { \n        exclude group: 'androidx.media3' // prevent version collisions with expo-video\n    }\n`;
         const hasInjectedMedia3Deps =
             buildGradle.includes(`implementation("androidx.media3:media3-exoplayer:${media3Version}")`) &&

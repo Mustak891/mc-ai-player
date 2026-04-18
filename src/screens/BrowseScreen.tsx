@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../constants/theme';
 import { useThemeContext } from '../context/ThemeContext';
 import FileRow from '../components/FileRow';
+import NativeFeedAdCard from '../components/NativeFeedAdCard';
 import { getParentDirectory } from '../utils/fileUtils';
 import { RootStackParamList } from '../navigation/types';
 import { readResumeStore } from '../utils/resumeStore';
@@ -331,23 +332,26 @@ const BrowseScreen = () => {
             : currentPath.split('/').pop() || 'Internal Storage';
 
     const renderFileItem = useCallback(
-        ({ item }: { item: FileItem }) => (
-            <FileRow
-                name={item.name}
-                isDirectory={item.isDirectory}
-                uri={item.uri}
-                size={item.size}
-                subtitle={
-                    item.subtitle ||
-                    (
-                        !item.isDirectory && isPlayableFileName(item.name) && (resumeMap[item.uri] ?? 0) > 0
-                            ? `Continue at ${formatTime(resumeMap[item.uri] ?? 0)}`
-                            : undefined
-                    )
-                }
-                onPress={handlePress}
-            />
-        ),
+        ({ item }: { item: FileItem }) => {
+            const file = item;
+            return (
+                <FileRow
+                    name={file.name}
+                    isDirectory={file.isDirectory}
+                    uri={file.uri}
+                    size={file.size}
+                    subtitle={
+                        file.subtitle ||
+                        (
+                            !file.isDirectory && isPlayableFileName(file.name) && (resumeMap[file.uri] ?? 0) > 0
+                                ? `Continue at ${formatTime(resumeMap[file.uri] ?? 0)}`
+                                : undefined
+                        )
+                    }
+                    onPress={handlePress}
+                />
+            );
+        },
         [handlePress, resumeMap]
     );
 
@@ -401,6 +405,7 @@ const BrowseScreen = () => {
                     updateCellsBatchingPeriod={50}
                     windowSize={7}
                     removeClippedSubviews
+                    ListFooterComponent={!isAndroidRootView && files.length > 0 ? <NativeFeedAdCard placement="browse-list" /> : null}
                     ListEmptyComponent={
                         <View style={styles.emptyState}>
                             <Ionicons name="folder-open-outline" size={64} color={colors.textMuted} />

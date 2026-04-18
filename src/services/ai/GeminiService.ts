@@ -57,7 +57,6 @@ export class GeminiService implements IAIService {
 
                 return await response.json();
             } catch (error: any) {
-                console.error("Backend AI Request Failed:", error);
                 throw new Error(error.message || "Failed to reach the AI analysis server.");
             }
         }
@@ -144,7 +143,6 @@ export class GeminiService implements IAIService {
             // 4. Send to Gemini
             return await this.analyzeWithBase64(base64, timestamp, videoTitle);
         } catch (error: any) {
-            console.error('Gemini API Error:', error);
             let errorMessage = error?.message || String(error);
 
             // Sanitize common API errors for the user

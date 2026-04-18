@@ -48,7 +48,7 @@ import { Detection } from '../services/ai/types';
 import { DEFAULT_EQUALIZER_SETTINGS, DEFAULT_PLAYER_CONTROL_SETTINGS, EQUALIZER_FREQUENCIES, EqualizerPresetId, EqualizerSettings, PlayerControlSettings } from '../types/playerSettings';
 import { applyEqualizerPreset, loadEqualizerSettings, saveEqualizerSettings } from '../utils/equalizerStore';
 import { loadPlaybackPrefs, savePlaybackPrefs } from '../utils/playbackPrefsStore';
-import { savePlaylistSnapshot, getPlaylists, SavedPlaylist } from '../utils/playlistStore';
+import { savePlaylistSnapshot, getPlaylists, SavedPlaylist, deletePlaylistById } from '../utils/playlistStore';
 import { loadPlayerControlSettings, savePlayerControlSettings } from '../utils/playerSettingsStore';
 import { loadResumeInfo, writeResumePosition } from '../utils/resumeStore';
 import { getSubtitleTextAt, parseSrt, parseVtt, SubtitleCue } from '../utils/subtitleUtils';
@@ -115,6 +115,18 @@ const STATUS_UI_POSITION_STEP_MS = 320;
 const STATUS_UI_MAX_STALE_MS = 900;
 const POPUP_WIDTH = 160;
 const POPUP_HEIGHT = 90;
+const HIGH_BITRATE_BUFFER_BYTES = 96 * 1024 * 1024;
+const HIGH_BITRATE_FORWARD_BUFFER_SECONDS = 45;
+const NORMAL_BUFFER_BYTES = 48 * 1024 * 1024;
+const NORMAL_FORWARD_BUFFER_SECONDS = 20;
+const NETWORK_BUFFER_BYTES = 72 * 1024 * 1024;
+const NETWORK_FORWARD_BUFFER_SECONDS = 30;
+const AUDIO_BUFFER_BYTES = 24 * 1024 * 1024;
+const AUDIO_FORWARD_BUFFER_SECONDS = 15;
+const SEEK_COMPLETION_TOLERANCE_MS = 1400;
+const SEEK_COMPLETION_TIMEOUT_MS = 2500;
+const QOE_SNAPSHOT_INTERVAL_MS = 15000;
+const ENABLE_QOE_DEBUG_LOGS = false;
 const USE_SYSTEM_PIP = pictureInPictureService.isNativeModuleAvailable();
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const subtitleFileNameRegex = /\.(srt|vtt)$/i;
@@ -169,10 +181,48 @@ const PlayerScreen = () => {
     const { width, height } = useWindowDimensions();
     const isIncognito = useSettingsStore((state) => state.isIncognito);
     const isLandscape = width > height;
+    const sourceIsAudioOnly = isAudioOnlyUri(videoUri);
+    const isLikelyNetworkStream = /^(https?|rtsp|rtmp|udp):/i.test(videoUri);
+
+    const bufferProfile = useMemo(() => {
+        if (sourceIsAudioOnly) {
+            return {
+                preferredForwardBufferDuration: AUDIO_FORWARD_BUFFER_SECONDS,
+                minBufferForPlayback: 1.5,
+                maxBufferBytes: AUDIO_BUFFER_BYTES,
+                prioritizeTimeOverSizeThreshold: true,
+                label: 'audio',
+            };
+        }
+        if (isLikelyNetworkStream) {
+            return {
+                preferredForwardBufferDuration: NETWORK_FORWARD_BUFFER_SECONDS,
+                minBufferForPlayback: 3.0,
+                maxBufferBytes: NETWORK_BUFFER_BYTES,
+                prioritizeTimeOverSizeThreshold: true,
+                label: 'network',
+            };
+        }
+        return {
+            preferredForwardBufferDuration: HIGH_BITRATE_FORWARD_BUFFER_SECONDS,
+            minBufferForPlayback: 2.5,
+            maxBufferBytes: HIGH_BITRATE_BUFFER_BYTES,
+            prioritizeTimeOverSizeThreshold: true,
+            label: 'local-high-bitrate',
+        };
+    }, [sourceIsAudioOnly, isLikelyNetworkStream]);
+
     const initialResumeSeconds = forcePlayFromStart ? 0 : Math.max(0, initialResumePositionMillis) / 1000;
     const player = useVideoPlayer({ uri: videoUri }, (instance) => {
         instance.loop = false;
-        instance.timeUpdateEventInterval = 0.25;
+        instance.timeUpdateEventInterval = 0.5;
+        // Adapt buffering by source type to reduce rebuffers without over-buffering every file.
+        instance.bufferOptions = {
+            preferredForwardBufferDuration: bufferProfile.preferredForwardBufferDuration,
+            minBufferForPlayback: bufferProfile.minBufferForPlayback,
+            maxBufferBytes: bufferProfile.maxBufferBytes,
+            prioritizeTimeOverSizeThreshold: bufferProfile.prioritizeTimeOverSizeThreshold,
+        };
         // Start immediately to remove perceived pause on open.
         if (initialResumeSeconds > 0.25) {
             try {
@@ -263,6 +313,17 @@ const PlayerScreen = () => {
     const skipNextPiPExitAutoStopRef = useRef(false);
     const hasEverEnteredPiPRef = useRef(false);
     const appStateRef = useRef(AppState.currentState);
+    const pendingSeekRef = useRef<{ requestedAt: number; targetMs: number; reason: string } | null>(null);
+    const qoeStatsRef = useRef({
+        startedAt: Date.now(),
+        startupCompletedAt: null as number | null,
+        rebufferCount: 0,
+        rebufferDurationMs: 0,
+        rebufferStartedAt: null as number | null,
+        seekCount: 0,
+        seekLatencyTotalMs: 0,
+        lastSnapshotAt: 0,
+    });
     const shouldDismissPlayerOnNextActiveRef = useRef(false);
     const initialSeekTargetMsRef = useRef(0);
     const initialSeekRevealTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -309,6 +370,27 @@ const PlayerScreen = () => {
     const [audioOptions, setAudioOptions] = useState<string[]>(['Default Audio Track']);
     const [detectedAudioTrackCount, setDetectedAudioTrackCount] = useState(0);
     const [selectedAudioTrack, setSelectedAudioTrack] = useState('Default Audio Track');
+
+    const logQoeSnapshot = useCallback((reason: string) => {
+        if (!__DEV__ || !ENABLE_QOE_DEBUG_LOGS) return;
+        const q = qoeStatsRef.current;
+        const startupMs = q.startupCompletedAt ? q.startupCompletedAt - q.startedAt : null;
+        const avgSeekLatencyMs = q.seekCount > 0 ? Math.round(q.seekLatencyTotalMs / q.seekCount) : 0;
+        const sessionMs = Date.now() - q.startedAt;
+        console.log(
+            `[PlayerQoE] reason=${reason} profile=${bufferProfile.label} sessionMs=${sessionMs} startupMs=${startupMs ?? -1} rebuffers=${q.rebufferCount} rebufferMs=${q.rebufferDurationMs} seeks=${q.seekCount} avgSeekMs=${avgSeekLatencyMs}`
+        );
+    }, [bufferProfile.label]);
+
+    const performTrackedSeek = useCallback((targetMs: number, reason: string) => {
+        const clampedTarget = Math.max(0, Math.floor(targetMs));
+        pendingSeekRef.current = {
+            requestedAt: Date.now(),
+            targetMs: clampedTarget,
+            reason,
+        };
+        player.currentTime = clampedTarget / 1000;
+    }, [player]);
     const [isAudioTrackDisabled, setIsAudioTrackDisabled] = useState(false);
     const [audioSectionExpanded, setAudioSectionExpanded] = useState(true);
     const [subtitleSectionExpanded, setSubtitleSectionExpanded] = useState(true);
@@ -343,10 +425,6 @@ const PlayerScreen = () => {
         type: 'volume' | 'brightness' | null;
         value: number;
     }>({ visible: false, type: null, value: 0 });
-    const [playlistItems] = useState([
-        { id: '1', title: title || 'Current Video', uri: videoUri },
-        { id: '2', title: 'Sample Clip', uri: videoUri },
-    ]);
     const [isTouchLocked, setIsTouchLocked] = useState(false);
     const initialPlaybackReadyRef = useRef(isInitialPlaybackReady);
     const selectedAudioTrackRef = useRef(selectedAudioTrack);
@@ -375,6 +453,25 @@ const PlayerScreen = () => {
     useEffect(() => {
         isIncognitoRef.current = isIncognito;
     }, [isIncognito]);
+
+    const loadSavedPlaylists = useCallback(async () => {
+        const items = await getPlaylists();
+        setSavedPlaylists(items);
+        return items;
+    }, []);
+
+    useEffect(() => {
+        let alive = true;
+        void (async () => {
+            const items = await loadSavedPlaylists();
+            if (!alive) return;
+            setSavedPlaylists(items);
+        })();
+
+        return () => {
+            alive = false;
+        };
+    }, [loadSavedPlaylists, videoUri]);
 
     // Hide the status bar while the player is mounted and restore it instantly on unmount.
     // This prevents the VideoLibrary layout from jumping when the status bar reappears on back navigation.
@@ -1952,7 +2049,6 @@ const PlayerScreen = () => {
             setDetections(result.detections);
 
         } catch (error: any) {
-            console.warn('AI Analysis or Ad failed:', error);
             setIsAdPlaying(false);
             setIsAiAnalyzing(false);
             // If try to play failed but video was playing, restart
@@ -2100,6 +2196,41 @@ const PlayerScreen = () => {
             }
             statusRef.current = nextStatus;
 
+            const qoe = qoeStatsRef.current;
+            const isLoadingNow = player.status === 'loading';
+            const hasBecameLoaded = !prevStatus.isLoaded && nextStatus.isLoaded;
+            if (hasBecameLoaded && qoe.startupCompletedAt === null) {
+                qoe.startupCompletedAt = now;
+                logQoeSnapshot('startup-complete');
+            }
+
+            if (isLoadingNow && prevStatus.isPlaying && !nextStatus.isPlaying && qoe.rebufferStartedAt === null) {
+                qoe.rebufferStartedAt = now;
+                qoe.rebufferCount += 1;
+            }
+
+            if (!isLoadingNow && qoe.rebufferStartedAt !== null) {
+                qoe.rebufferDurationMs += Math.max(0, now - qoe.rebufferStartedAt);
+                qoe.rebufferStartedAt = null;
+            }
+
+            const pendingSeek = pendingSeekRef.current;
+            if (pendingSeek) {
+                const seekSettledByPosition =
+                    Math.abs(nextStatus.positionMillis - pendingSeek.targetMs) <= SEEK_COMPLETION_TOLERANCE_MS;
+                const seekTimedOut = now - pendingSeek.requestedAt >= SEEK_COMPLETION_TIMEOUT_MS;
+                if (seekSettledByPosition || seekTimedOut) {
+                    qoe.seekCount += 1;
+                    qoe.seekLatencyTotalMs += Math.max(0, now - pendingSeek.requestedAt);
+                    pendingSeekRef.current = null;
+                }
+            }
+
+            if (now - qoe.lastSnapshotAt >= QOE_SNAPSHOT_INTERVAL_MS) {
+                qoe.lastSnapshotAt = now;
+                logQoeSnapshot('periodic');
+            }
+
             if (!initialPlaybackReadyRef.current && nextStatus.isLoaded) {
                 const pendingInitialSeekTargetMs = initialSeekTargetMsRef.current;
                 if (
@@ -2185,7 +2316,7 @@ const PlayerScreen = () => {
         if (!status.isLoaded) return;
         const duration = status.durationMillis ?? 0;
         const nextPosition = Math.max(0, Math.min(duration, status.positionMillis + seconds * 1000));
-        player.currentTime = nextPosition / 1000;
+        performTrackedSeek(nextPosition, 'jump-by-seconds');
         flashSeekFeedback(seconds > 0 ? `+${seconds}s` : `${seconds}s`);
     };
 
@@ -2267,7 +2398,7 @@ const PlayerScreen = () => {
     const handleSeek = async (value: number) => {
         sliderSeekingRef.current = false;
         if (stableDurationMillis <= 0) return;
-        player.currentTime = value / 1000;
+        performTrackedSeek(value, 'slider-seek');
         setSeekPreviewPosition(value);
         setIsSeeking(false);
         setStatus((prev) => ({ ...prev, positionMillis: value }));
@@ -2488,7 +2619,7 @@ const PlayerScreen = () => {
     const applyJumpToTime = (targetMs: number) => {
         if (!status.isLoaded) return;
         const clampedTarget = clamp(targetMs, 0, status.durationMillis || 0);
-        player.currentTime = clampedTarget / 1000;
+        performTrackedSeek(clampedTarget, 'jump-to-time');
         setJumpTargetMs(clampedTarget);
         setSeekPreviewPosition(clampedTarget);
         setStatus((prev) => ({ ...prev, positionMillis: clampedTarget }));
@@ -2767,7 +2898,7 @@ const PlayerScreen = () => {
             durationMs > 0
                 ? clamp(currentMs + deltaMs, 0, durationMs)
                 : Math.max(0, currentMs + deltaMs);
-        player.currentTime = nextMs / 1000;
+        performTrackedSeek(nextMs, 'pip-action-seek');
         statusRef.current.positionMillis = nextMs;
     };
 
@@ -2957,11 +3088,76 @@ const PlayerScreen = () => {
             Alert.alert('Incognito Mode', 'Playlist snapshots are disabled while Incognito Mode is enabled.');
             return;
         }
+
+        const existing = await loadSavedPlaylists();
+        const alreadyExists = existing.some((playlist) =>
+            playlist.items.some((item) => item.uri === videoUri)
+        );
+        if (alreadyExists) {
+            Alert.alert('Already in playlist', 'This video is already in the playlist.');
+            flashSeekFeedback('Already in playlist');
+            return;
+        }
+
         const playlistName = `${title || 'Playlist'} - ${new Date().toLocaleString()}`;
-        await savePlaylistSnapshot(playlistName, playlistItems);
-        setShowPlaylist(true);
+        const snapshotItems = [
+            {
+                id: videoUri,
+                title: title || 'Current Video',
+                uri: videoUri,
+            },
+        ];
+        await savePlaylistSnapshot(playlistName, snapshotItems);
+        await loadSavedPlaylists();
+        setShowPlaylist(false);
         setMorePanelVisible(false);
-        Alert.alert('Playlist', 'Playlist saved successfully.');
+        flashSeekFeedback('Saved to Playlist');
+    };
+
+    const openSavedPlaylistsPanel = async () => {
+        await loadSavedPlaylists();
+        setShowPlaylist(true);
+        closeAllPanels();
+    };
+
+    const handleDeleteSavedPlaylist = (playlist: SavedPlaylist) => {
+        Alert.alert(
+            'Delete playlist',
+            `Remove "${playlist.name}"?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: () => {
+                        void (async () => {
+                            const deleted = await deletePlaylistById(playlist.id);
+                            if (!deleted) {
+                                Alert.alert('Delete failed', 'Could not remove the playlist. Please try again.');
+                                return;
+                            }
+                            const next = await loadSavedPlaylists();
+                            setSavedPlaylists(next);
+                        })();
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleOpenSavedPlaylist = (playlist: SavedPlaylist) => {
+        const firstItem = playlist.items[0];
+        if (!firstItem?.uri) {
+            Alert.alert('Playlist empty', 'This playlist has no playable items.');
+            return;
+        }
+
+        setShowPlaylist(false);
+        navigation.navigate('Player', {
+            videoUri: firstItem.uri,
+            title: firstItem.title || playlist.name,
+            initialResumePositionMillis: 0,
+        });
     };
 
     const cycleQuickDisplayModeInternal = (showHint: boolean) => {
@@ -3444,6 +3640,17 @@ const PlayerScreen = () => {
     );
     const landscapeSidePanelWidth = Math.min(420, Math.max(320, Math.floor(width * 0.48)));
     const landscapeWidePanelWidth = Math.min(640, Math.max(420, Math.floor(width * 0.72)));
+    const playlistPanelFrameStyle = isLandscape
+        ? {
+            top: landscapeOverlayTop,
+            bottom: undefined,
+            width: Math.min(560, Math.max(360, Math.floor(width * 0.56))),
+            height: landscapeOverlayHeight,
+        }
+        : {
+            width: Math.min(380, width - ((insets.left || 0) + (insets.right || 0) + (SPACING.m * 2))),
+            maxHeight: Math.max(260, Math.floor(height * 0.62)),
+        };
     const sidePanelFrameStyle = isLandscape
         ? {
             top: landscapeOverlayTop,
@@ -3510,6 +3717,17 @@ const PlayerScreen = () => {
         };
     })();
 
+    useEffect(() => {
+        return () => {
+            const qoe = qoeStatsRef.current;
+            if (qoe.rebufferStartedAt !== null) {
+                qoe.rebufferDurationMs += Math.max(0, Date.now() - qoe.rebufferStartedAt);
+                qoe.rebufferStartedAt = null;
+            }
+            logQoeSnapshot('session-end');
+        };
+    }, [logQoeSnapshot]);
+
     return (
         <Animated.View
             style={[
@@ -3546,6 +3764,7 @@ const PlayerScreen = () => {
                                 player={player}
                                 nativeControls={false}
                                 contentFit={selectedDisplayMode.contentFit}
+                                surfaceType="surfaceView"
                             />
                         ) : (
                             <View style={styles.audioOnlyCard}>
@@ -4216,23 +4435,19 @@ const PlayerScreen = () => {
                                             <Ionicons name="information-circle-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>Video Information</Text>
                                         </TouchableOpacity>
-                                        <TouchableOpacity style={styles.panelItem} onPress={addBookmark}>
-                                            <Ionicons name="bookmark-outline" size={18} color={colors.white} />
-                                            <Text style={styles.panelItemText}>Bookmarks ({bookmarks.length})</Text>
-                                        </TouchableOpacity>
                                         <TouchableOpacity style={styles.panelItem} onPress={cycleAbRepeat}>
                                             <Ionicons name="repeat-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>
                                                 A-B repeat: {abRepeatStartMs === null ? 'Off' : abRepeatEndMs === null ? 'Set B' : 'On'}
                                             </Text>
                                         </TouchableOpacity>
-                                        <TouchableOpacity style={styles.panelItem} onPress={() => { setShowPlaylist((prev) => !prev); closeAllPanels(); }}>
+                                        <TouchableOpacity style={styles.panelItem} onPress={() => void openSavedPlaylistsPanel()}>
                                             <Ionicons name="list-outline" size={18} color={colors.white} />
                                             <Text style={styles.panelItemText}>Playlists</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity style={styles.panelItem} onPress={() => void saveCurrentPlaylist()}>
-                                            <Ionicons name="save-outline" size={18} color={colors.white} />
-                                            <Text style={styles.panelItemText}>Save playlist snapshot</Text>
+                                            <Ionicons name="albums-outline" size={18} color={colors.white} />
+                                            <Text style={styles.panelItemText}>Save to Playlist</Text>
                                         </TouchableOpacity>
                                         <TouchableOpacity
                                             style={styles.panelItem}
@@ -4371,7 +4586,7 @@ const PlayerScreen = () => {
                             )}
 
                             {showPlaylist && (
-                                <View style={styles.playlistPanel}>
+                                <View style={[styles.playlistPanel, playlistPanelFrameStyle]}>
                                     <View style={styles.playlistHeaderRow}>
                                         <Text style={styles.panelTitle}>Saved Playlists</Text>
                                         <TouchableOpacity onPress={() => setShowPlaylist(false)}>
@@ -4382,22 +4597,29 @@ const PlayerScreen = () => {
                                     {savedPlaylists.length === 0 ? (
                                         <Text style={styles.panelMetaText}>No playlists saved yet.</Text>
                                     ) : (
-                                        savedPlaylists.map((playlist, index) => (
-                                            <TouchableOpacity
-                                                key={playlist.id}
-                                                style={styles.panelItem}
-                                                onPress={() => {
-                                                    // Placeholder for actually loading the playlist items into a player queue.
-                                                    flashSeekFeedback(`Loaded ${playlist.name}`);
-                                                    setShowPlaylist(false);
-                                                }}
-                                            >
-                                                <Ionicons name="albums-outline" size={18} color={colors.primary} />
-                                                <Text style={styles.panelItemText}>
-                                                    {playlist.name} ({playlist.items.length} items)
-                                                </Text>
-                                            </TouchableOpacity>
-                                        ))
+                                        <ScrollView style={styles.playlistListScroll} contentContainerStyle={styles.playlistListContent}>
+                                            {savedPlaylists.map((playlist) => (
+                                                <View key={playlist.id} style={styles.playlistRowItem}>
+                                                    <TouchableOpacity
+                                                        style={styles.playlistRowMainAction}
+                                                        onPress={() => handleOpenSavedPlaylist(playlist)}
+                                                    >
+                                                        <Ionicons name="albums-outline" size={18} color={colors.primary} />
+                                                        <Text style={styles.panelItemText} numberOfLines={1}>
+                                                            {playlist.name} ({playlist.items.length} items)
+                                                        </Text>
+                                                    </TouchableOpacity>
+
+                                                    <TouchableOpacity
+                                                        style={styles.playlistDeleteAction}
+                                                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                                                        onPress={() => handleDeleteSavedPlaylist(playlist)}
+                                                    >
+                                                        <Ionicons name="trash-outline" size={17} color={colors.error} />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            ))}
+                                        </ScrollView>
                                     )}
                                     {bookmarks.length > 0 && (
                                         <>
@@ -5017,6 +5239,40 @@ const usePlayerScreenStyles = (colors: any, insets: any) => StyleSheet.create({
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: 0.55,
         shadowRadius: 16,
+        overflow: 'hidden',
+    },
+    playlistListScroll: {
+        flex: 1,
+        minHeight: 0,
+    },
+    playlistListContent: {
+        paddingBottom: SPACING.xs,
+        gap: 6,
+    },
+    playlistRowItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: SPACING.s,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.borderSubtle,
+        paddingVertical: 6,
+    },
+    playlistRowMainAction: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: SPACING.s,
+        flex: 1,
+        paddingVertical: 4,
+    },
+    playlistDeleteAction: {
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: colors.borderSubtle,
+        backgroundColor: 'rgba(255,255,255,0.03)',
     },
     playlistHeaderRow: {
         flexDirection: 'row',
