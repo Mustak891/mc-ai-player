@@ -41,6 +41,16 @@ In the project directory, you can run:
 - `npm run ios`: Opens the app on an iOS simulator.
 - `npm run web`: Opens the app in a web browser.
 
+## GitHub Copilot model access (Claude Opus/Sonnet)
+
+If you have a GitHub Copilot Education account and cannot select Claude Opus or Claude Sonnet, it is usually an account entitlement or rollout limitation, not a project issue.
+
+Quick checks:
+- Confirm your Copilot subscription is active on the same GitHub account used in your editor.
+- Update VS Code/JetBrains and the GitHub Copilot + Copilot Chat extensions.
+- Check the Copilot Chat model picker. If Claude models are missing, they may not be enabled for your account, plan, organization policy, or region yet.
+- If needed, open a GitHub Support ticket and include your account type (Education), editor, extension versions, and a screenshot of available models.
+
 ## Project Structure
 
 - `App.tsx`: The main entry point of the application.

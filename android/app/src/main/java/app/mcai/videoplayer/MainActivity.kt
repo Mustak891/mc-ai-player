@@ -87,15 +87,6 @@ class MainActivity : ReactActivity() {
       emitPlayerLifecycleEvent(eventName)
   }
 
-  override fun onTrimMemory(level: Int) {
-      super.onTrimMemory(level)
-      if (level >= TRIM_MEMORY_RUNNING_LOW) {
-          // Explicitly hint to the JVM that it's a good time to collect
-          // if the system is under memory pressure.
-          System.gc()
-      }
-  }
-
   override fun onDestroy() {
       if (isFinishing) {
           emitPlayerLifecycleEvent("app.mcai.videoplayer.app.DESTROYED")

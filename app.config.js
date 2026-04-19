@@ -1,11 +1,21 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const isProdBuild = process.env.EAS_BUILD_PROFILE === 'production';
 const isTestAdMobId = (value) => typeof value === 'string' && value.includes('ca-app-pub-3940256099942544');
+const iosAdMobAppId = process.env.ADMOB_IOS_APP_ID || 'ca-app-pub-3940256099942544~1458002511';
+const isValidInlineAdProfile = (value) => {
+    if (!value) return true;
+    const normalized = value.toLowerCase();
+    return ['conservative', 'balanced', 'revenue-first', 'revenue_first', 'revenuefirst'].includes(normalized);
+};
 
 if (!process.env.AI_BACKEND_URL && !process.env.GEMINI_API_KEY) {
     console.warn('\x1b[33m%s\x1b[0m', 'WARNING: Neither AI_BACKEND_URL nor GEMINI_API_KEY is defined.');
     console.warn('\x1b[33m%s\x1b[0m', 'AI Analysis feature will not work in this build.');
+}
+
+if (!isValidInlineAdProfile(process.env.INLINE_AD_PROFILE)) {
+    throw new Error('INLINE_AD_PROFILE must be one of: conservative, balanced, revenue-first.');
 }
 
 if (isProdBuild) {
@@ -21,6 +31,24 @@ if (isProdBuild) {
     if (isTestAdMobId(process.env.ADMOB_ANDROID_APP_ID) || isTestAdMobId(process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID)) {
         throw new Error('Production build is using AdMob test IDs. Replace with live AdMob IDs.');
     }
+    if (process.env.ADMOB_NATIVE_FEED_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_FEED_UNIT_ID)) {
+        throw new Error('Production build is using a test Native AdMob ID. Replace with a live native ad unit ID.');
+    }
+    if (process.env.ADMOB_NATIVE_VIDEO_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_VIDEO_UNIT_ID)) {
+        throw new Error('Production build is using a test video native AdMob ID. Replace with a live native ad unit ID.');
+    }
+    if (process.env.ADMOB_NATIVE_AUDIO_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_AUDIO_UNIT_ID)) {
+        throw new Error('Production build is using a test audio native AdMob ID. Replace with a live native ad unit ID.');
+    }
+    if (process.env.ADMOB_NATIVE_SETTINGS_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_SETTINGS_UNIT_ID)) {
+        throw new Error('Production build is using a test settings native AdMob ID. Replace with a live native ad unit ID.');
+    }
+    if (process.env.ADMOB_NATIVE_BROWSE_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_BROWSE_UNIT_ID)) {
+        throw new Error('Production build is using a test browse native AdMob ID. Replace with a live native ad unit ID.');
+    }
+    if (process.env.ADMOB_NATIVE_PLAYLIST_UNIT_ID && isTestAdMobId(process.env.ADMOB_NATIVE_PLAYLIST_UNIT_ID)) {
+        throw new Error('Production build is using a test playlist native AdMob ID. Replace with a live native ad unit ID.');
+    }
 }
 
 
@@ -34,7 +62,8 @@ module.exports = {
             [
                 "react-native-google-mobile-ads",
                 {
-                    "androidAppId": process.env.ADMOB_ANDROID_APP_ID
+                    "androidAppId": process.env.ADMOB_ANDROID_APP_ID,
+                    "iosAppId": iosAdMobAppId
                 }
             ],
             [
@@ -110,7 +139,14 @@ module.exports = {
             },
             "geminiApiKey": process.env.GEMINI_API_KEY,
             "aiBackendUrl": process.env.AI_BACKEND_URL,
-            "admobRewardedInterstitialUnitId": process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID
+            "admobRewardedInterstitialUnitId": process.env.ADMOB_REWARDED_INTERSTITIAL_UNIT_ID,
+            "admobNativeFeedUnitId": process.env.ADMOB_NATIVE_FEED_UNIT_ID,
+            "admobNativeVideoUnitId": process.env.ADMOB_NATIVE_VIDEO_UNIT_ID,
+            "admobNativeAudioUnitId": process.env.ADMOB_NATIVE_AUDIO_UNIT_ID,
+            "admobNativeSettingsUnitId": process.env.ADMOB_NATIVE_SETTINGS_UNIT_ID,
+            "admobNativeBrowseUnitId": process.env.ADMOB_NATIVE_BROWSE_UNIT_ID,
+            "admobNativePlaylistUnitId": process.env.ADMOB_NATIVE_PLAYLIST_UNIT_ID,
+            "inlineAdProfile": process.env.INLINE_AD_PROFILE || 'balanced'
         }
     }
 };

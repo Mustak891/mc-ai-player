@@ -24,6 +24,8 @@ import { FONT_SIZE, FONT_WEIGHT, LETTER_SPACING, RADIUS, SPACING } from '../cons
 import { useThemeContext } from '../context/ThemeContext';
 import { useVideoLibrary } from '../hooks/useVideoLibrary';
 import VideoCard from '../components/VideoCard';
+import NativeFeedAdCard from '../components/NativeFeedAdCard';
+import NativeVideoCardAd from '../components/NativeVideoCardAd';
 import DisplaySettingsModal from '../components/DisplaySettingsModal';
 import MediaOptionsBottomSheet, { MenuAction } from '../components/MediaOptionsBottomSheet';
 import FileInfoModal from '../components/FileInfoModal';
@@ -31,6 +33,11 @@ import * as Sharing from 'expo-sharing';
 import { RootStackParamList } from '../navigation/types';
 import { readResumeInfoStore, readResumeStore, ResumeStoreEntry } from '../utils/resumeStore';
 import { useSettingsStore } from '../store/settingsStore';
+import { adAnalytics } from '../services/ads/adAnalytics';
+
+type VideoListItem =
+    | { type: 'video'; key: string; video: MediaLibrary.Asset }
+    | { type: 'ad'; key: string; slotId: string };
 
 const shallowEqualNumberMap = (a: Record<string, number>, b: Record<string, number>) => {
     const aKeys = Object.keys(a);
@@ -202,6 +209,42 @@ const VideoLibraryScreen = () => {
             });
     }, [videos, searchQuery, sortBy, sortOrder]);
 
+    const shouldRenderNativeInlineAd = hasPermission && !isSearching;
+
+    const videoAdSlots = useMemo(() => {
+        if (!shouldRenderNativeInlineAd) return [];
+
+        const slots: Array<{ slotId: string; insertAfterCount: number }> = [];
+        for (let insertAfterCount = 6; insertAfterCount < filteredVideos.length; insertAfterCount += 6) {
+            const slotIndex = slots.length + 1;
+            slots.push({
+                slotId: `video-library-inline-${slotIndex}`,
+                insertAfterCount,
+            });
+        }
+
+        return slots;
+    }, [filteredVideos.length, shouldRenderNativeInlineAd]);
+
+    const videoListItems = useMemo<VideoListItem[]>(() => {
+        const mapped: VideoListItem[] = filteredVideos.map((video) => ({
+            type: 'video',
+            key: `video-${video.id}`,
+            video,
+        }));
+
+        videoAdSlots.forEach((slot, index) => {
+            const insertAt = Math.min(slot.insertAfterCount + index, mapped.length);
+            mapped.splice(insertAt, 0, {
+                type: 'ad',
+                key: `ad-${slot.slotId}`,
+                slotId: slot.slotId,
+            });
+        });
+
+        return mapped;
+    }, [filteredVideos, videoAdSlots]);
+
     const handleLastPlayed = useCallback(() => {
         if (lastPlayedUri && lastPlayedTitle) {
             handleVideoPress({ uri: lastPlayedUri, filename: lastPlayedTitle });
@@ -209,18 +252,33 @@ const VideoLibraryScreen = () => {
     }, [handleVideoPress, lastPlayedTitle, lastPlayedUri]);
 
     const renderVideoItem = useCallback(
-        ({ item }: { item: MediaLibrary.Asset }) => (
-            <VideoCard
-                video={item}
-                onPress={handleVideoPress}
-                onOptionsPress={setSelectedVideoMenu}
-                resumePositionMillis={resumeMap[item.uri] ?? 0}
-            />
-        ),
-        [handleVideoPress, resumeMap]
+        ({ item }: { item: VideoListItem }) => {
+            if (item.type === 'ad') {
+                adAnalytics.trackSlotRendered(item.slotId);
+                return viewMode === 'grid' ? <NativeVideoCardAd /> : <NativeFeedAdCard placement="video-list" />;
+            }
+            return (
+                <VideoCard
+                    video={item.video}
+                    onPress={handleVideoPress}
+                    onOptionsPress={setSelectedVideoMenu}
+                    resumePositionMillis={resumeMap[item.video.uri] ?? 0}
+                />
+            );
+        },
+        [handleVideoPress, resumeMap, viewMode]
     );
 
-    const videoKeyExtractor = useCallback((item: MediaLibrary.Asset) => item.id, []);
+    const videoKeyExtractor = useCallback((item: VideoListItem) => item.key, []);
+
+    const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 60 }).current;
+    const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: VideoListItem }> }) => {
+        viewableItems.forEach((token) => {
+            if (token.item?.type === 'ad') {
+                adAnalytics.trackSlotViewable(token.item.slotId);
+            }
+        });
+    }).current;
 
     const listContentStyle = useMemo(
         () => [styles.listContent, { paddingBottom: SPACING.xl + insets.bottom }],
@@ -307,12 +365,14 @@ const VideoLibraryScreen = () => {
             )}
 
             <FlatList
-                data={filteredVideos}
+                data={videoListItems}
                 key={viewMode} // Force re-render on grid/list toggle
                 renderItem={renderVideoItem}
                 keyExtractor={videoKeyExtractor}
                 numColumns={viewMode === 'grid' ? 2 : 1}
                 contentContainerStyle={listContentStyle}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={viewabilityConfig}
                 onRefresh={refetch}
                 refreshing={isLoading}
                 initialNumToRender={12}

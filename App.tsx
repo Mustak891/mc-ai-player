@@ -1,7 +1,7 @@
 import React from 'react';
 import 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { View } from 'react-native';
+import { LogBox, View } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
 import * as NavigationBar from 'expo-navigation-bar';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -12,6 +12,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync();
+
+LogBox.ignoreLogs([
+  '[expo-av]: Expo AV has been deprecated',
+  'VirtualizedList: You have a large list that is slow to update',
+]);
 
 const ThemedAppShell: React.FC<{ fontsLoaded: boolean }> = ({ fontsLoaded }) => {
   const { colors, isThemeReady, isDark } = useThemeContext();
